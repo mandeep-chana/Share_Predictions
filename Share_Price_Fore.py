@@ -145,6 +145,9 @@ class StockAnalyzer:
                 print(f"No data found for ticker {self.ticker_symbol}")
                 return
 
+            # Remove timezone information
+            self.stock_data.index = self.stock_data.index.tz_localize(None)
+
             # Save stock data to CSV
             self.stock_data.to_csv(f'{self.ticker_symbol}_stock_data.csv')
             print(f"Stock data saved to {self.ticker_symbol}_stock_data.csv")
@@ -164,9 +167,12 @@ class StockAnalyzer:
             # Create a copy of the data and reset index
             df = self.stock_data.reset_index()
 
+            # Remove timezone information from dates
+            df['Date'] = df['Date'].dt.tz_localize(None)
+
             # Create Prophet dataframe with required columns
             prophet_df = pd.DataFrame()
-            prophet_df['ds'] = df['Date']  # Date column
+            prophet_df['ds'] = df['Date']  # Date column without timezone
             prophet_df['y'] = df['Close'].values.flatten()  # Close price column
 
             # Ensure data is sorted by date
@@ -178,6 +184,10 @@ class StockAnalyzer:
             print(f"Prepared {len(prophet_df)} rows of data for forecasting")
             print("Sample of prepared data:")
             print(prophet_df.head())
+
+            # Verify no timezone information
+            print("\nVerifying datetime format:")
+            print(f"Timezone information present: {prophet_df['ds'].dt.tz is not None}")
 
             return prophet_df
 
@@ -196,6 +206,7 @@ class StockAnalyzer:
 
         try:
             # Create and fit Prophet model
+            print("Creating Prophet model...")
             model = Prophet(
                 daily_seasonality=True,
                 weekly_seasonality=True,
@@ -207,6 +218,7 @@ class StockAnalyzer:
             model.fit(df)
 
             # Create future dates for forecasting
+            print("Creating future dates dataframe...")
             future_dates = model.make_future_dataframe(periods=days_to_forecast)
 
             print("Generating forecast...")
@@ -214,62 +226,132 @@ class StockAnalyzer:
             forecast = model.predict(future_dates)
 
             # Save forecast to CSV
-            forecast.to_csv(f'{self.ticker_symbol}_forecast.csv')
-            print(f"Forecast data saved to {self.ticker_symbol}_forecast.csv")
+            forecast_file = f'{self.ticker_symbol}_forecast.csv'
+            forecast.to_csv(forecast_file)
+            print(f"Forecast data saved to {forecast_file}")
+
+            # Create directory for plots if it doesn't exist
+            import os
+            plots_dir = 'forecast_plots'
+            os.makedirs(plots_dir, exist_ok=True)
 
             # Plot the forecast
+            print("Creating forecast plot...")
             fig = model.plot(forecast)
             plt.title(f'{self.ticker_symbol} Stock Price Forecast')
-            plt.savefig(f'{self.ticker_symbol}_forecast_plot.png')
-            print(f"Forecast plot saved to {self.ticker_symbol}_forecast_plot.png")
+            forecast_plot = os.path.join(plots_dir, f'{self.ticker_symbol}_forecast_plot.png')
+            plt.savefig(forecast_plot)
+            plt.close(fig)  # Close the figure to free memory
+            print(f"Forecast plot saved to {forecast_plot}")
 
             # Plot the components
+            print("Creating components plot...")
             fig2 = model.plot_components(forecast)
-            plt.savefig(f'{self.ticker_symbol}_forecast_components.png')
-            print(f"Forecast components plot saved to {self.ticker_symbol}_forecast_components.png")
+            components_plot = os.path.join(plots_dir, f'{self.ticker_symbol}_forecast_components.png')
+            plt.savefig(components_plot)
+            plt.close(fig2)  # Close the figure to free memory
+            print(f"Forecast components plot saved to {components_plot}")
+
+            # Print some forecast statistics
+            print("\nForecast Statistics:")
+            print(f"Number of forecasted days: {days_to_forecast}")
+            print(f"Forecast date range: {forecast['ds'].min()} to {forecast['ds'].max()}")
+            print(f"Average forecasted price: ${forecast['yhat'].mean():.2f}")
+            print(f"Price range: ${forecast['yhat'].min():.2f} to ${forecast['yhat'].max():.2f}")
 
             return forecast
 
         except Exception as e:
             print(f"Error in forecasting: {str(e)}")
-            print("DataFrame shape:", df.shape)
-            print("DataFrame columns:", df.columns.tolist())
-            print("DataFrame head:", df.head())
+            import traceback
+            print("Detailed error:")
+            print(traceback.format_exc())
             return None
 
 
+    def print_forecast_summary(self, forecast):
+        """Print a detailed summary of the forecast results"""
+        print("\n" + "=" * 50)
+        print(f"FORECAST SUMMARY FOR {self.ticker_symbol}")
+        print("=" * 50)
+
+        # Date range
+        print("\nForecast Period:")
+        print(f"Start Date: {forecast['ds'].min().strftime('%Y-%m-%d')}")
+        print(f"End Date: {forecast['ds'].max().strftime('%Y-%m-%d')}")
+
+        # Price Statistics
+        print("\nPrice Predictions:")
+        print(f"Current Price: ${forecast['yhat'].iloc[-1]:.2f}")
+        print(f"30-Day Average: ${forecast['yhat'].tail(30).mean():.2f}")
+        print(f"30-Day Range: ${forecast['yhat'].tail(30).min():.2f} - ${forecast['yhat'].tail(30).max():.2f}")
+
+        # Confidence Intervals
+        print("\nConfidence Intervals (Last Day):")
+        last_day = forecast.iloc[-1]
+        print(f"Lower Bound: ${last_day['yhat_lower']:.2f}")
+        print(f"Upper Bound: ${last_day['yhat_upper']:.2f}")
+        print(f"Range: ${(last_day['yhat_upper'] - last_day['yhat_lower']):.2f}")
+
+        # Growth Analysis
+        first_price = forecast['yhat'].iloc[0]
+        last_price = forecast['yhat'].iloc[-1]
+        growth = ((last_price - first_price) / first_price) * 100
+        print(f"\nProjected Growth: {growth:.1f}%")
+
+        # Volatility Measure
+        volatility = forecast['yhat'].std()
+        print(f"Forecast Volatility: ${volatility:.2f}")
+
+        print("\nGenerated Files:")
+        print(f"- Detailed forecast data: {self.ticker_symbol}_forecast.csv")
+        print(f"- Forecast visualization: forecast_plots/{self.ticker_symbol}_forecast_plot.png")
+        print(f"- Components analysis: forecast_plots/{self.ticker_symbol}_forecast_components.png")
+
 
 def main():
-    # Example usage
-    ticker = "AAPL"  # Change this to any stock symbol you want to analyze
-    analyzer = StockAnalyzer(ticker)
+  # Example usage
+  ticker = "AAPL"  # Change this to any stock symbol you want to analyze
+  analyzer = StockAnalyzer(ticker)
 
-    # Fetch news and stock data
-    print(f"Fetching news for {ticker}...")
-    analyzer.fetch_financial_news()
+  # Fetch news and stock data
+  print(f"Fetching news for {ticker}...")
+  analyzer.fetch_financial_news()
 
-    print(f"Fetching stock data for {ticker}...")
-    analyzer.fetch_stock_data()
+  print(f"Fetching stock data for {ticker}...")
+  analyzer.fetch_stock_data()
 
-    if analyzer.stock_data is not None and not analyzer.stock_data.empty:
-        # Perform forecasting
-        print("Generating forecast...")
-        forecast = analyzer.forecast_prices()
+  if analyzer.stock_data is not None and not analyzer.stock_data.empty:
+      # Verify the data
+      print("\nStock data verification:")
+      print(f"Number of records: {len(analyzer.stock_data)}")
+      print("First few rows of stock data:")
+      print(analyzer.stock_data.head())
 
-        if forecast is not None:
-            # Print the next 7 days forecast
-            next_week = forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail(7)
-            print("\nNext 7 days forecast:")
-            print(next_week.to_string())
+      # Perform forecasting
+      print("\nGenerating forecast...")
+      forecast = analyzer.forecast_prices()
 
-            # Print the forecast metrics
-            print("\nForecast Summary:")
-            print(f"Average predicted price: ${forecast['yhat'].mean():.2f}")
-            print(f"Maximum predicted price: ${forecast['yhat'].max():.2f}")
-            print(f"Minimum predicted price: ${forecast['yhat'].min():.2f}")
-    else:
-        print("Unable to proceed with forecast due to missing stock data")
+      if forecast is not None:
+          # Print detailed forecast summary
+          analyzer.print_forecast_summary(forecast)
 
+          # Verify forecast output
+          print("\nForecast verification:")
+          print("Forecast files created:")
+          import os
+          expected_files = [
+              f'{ticker}_forecast.csv',
+              os.path.join('forecast_plots', f'{ticker}_forecast_plot.png'),
+              os.path.join('forecast_plots', f'{ticker}_forecast_components.png')
+          ]
+          for file in expected_files:
+              if os.path.exists(file):
+                  print(f"✓ {file} (Size: {os.path.getsize(file)} bytes)")
+              else:
+                  print(f"✗ {file} (Not created)")
+  else:
+      print("Unable to proceed with forecast due to missing stock data")
 
 if __name__ == "__main__":
     main()
