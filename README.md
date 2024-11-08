@@ -44,7 +44,8 @@ View Output: After running, you will find a folder for each ticker symbol. Each 
 <TICKER>_stock_data.csv: Contains historical stock data for the past two years.
 <TICKER>_forecast.csv: Contains forecasted stock prices for the next 30 days.
 forecast_plots/: Contains forecast and component plots for visual analysis.
-Example Output Structure
+
+## Example Output Structure
 For a ticker AAPL, the folder structure will look like this:
 
 Copy code
@@ -55,14 +56,14 @@ AAPL/
 └── forecast_plots/
     ├── AAPL_forecast_plot.png
     └── AAPL_forecast_components.png
-Troubleshooting
+## Troubleshooting
 Error fetching stock data: Ensure that the ticker symbol in tickers.txt is correct. Some tickers may not have data available.
 Error fetching news: News sources and HTML structure may change over time, so selectors may need updating if scraping fails.
-License
+## License
 This project is licensed under the MIT License. See the LICENSE file for details.
 
-Contributions
+## Contributions
 Feel free to submit issues or pull requests for any improvements or bug fixes. Your contributions are welcome!
 
-Author
+## Author
 Mannie
