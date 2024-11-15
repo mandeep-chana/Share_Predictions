@@ -9,7 +9,6 @@ from datetime import datetime
 import random
 
 # Set up logging
-
 logger = logging.getLogger()
 logger.setLevel(logging.DEBUG)
 if not logger.hasHandlers():
@@ -20,7 +19,7 @@ if not logger.hasHandlers():
 logger.debug("Logging initialized.")
 
 # Replace with your actual Alpaca API credentials
-from config import ALPACA_API_KEY, ALPACA_SECRET_KEY
+from config import ALPACA_API_KEY, ALPACA_SECRET_KEY  # Removed extra characters
 
 # Initialize Alpaca API client
 client = StockHistoricalDataClient(ALPACA_API_KEY, ALPACA_SECRET_KEY)
