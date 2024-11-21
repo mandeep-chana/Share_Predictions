@@ -32,6 +32,8 @@ from tensorflow.keras.optimizers import Adam
 import pandas_datareader as pdr
 from fredapi import Fred
 import mibian
+import logging
+from datetime import datetime, timedelta
 
 
 def parse_date(date_str):
@@ -920,6 +922,58 @@ class StockAnalyzer:
         except Exception as e:
             logging.error(f"Error performing technical analysis for {self.ticker_symbol}: {str(e)}", exc_info=True)
             return None, None
+
+    def analyze_stock(self):
+        """Main analysis pipeline"""
+        try:
+            print(f"\nStarting analysis for {self.ticker_symbol}...")
+
+            # Data Collection
+            self.fetch_company_info()
+            self.fetch_financial_news()
+            self.fetch_stock_data()
+
+            # Perform technical analysis
+            if self.stock_data is not None and not self.stock_data.empty:
+                results, summary = self.perform_technical_analysis()
+                logging.info(f"Technical analysis summary for {self.ticker_symbol}: {summary}")
+
+                self.generate_buy_sell_signals(results)
+
+
+
+        except Exception as e:
+            logging.error(f"Error analyzing stock {self.ticker_symbol}: {str(e)}")
+
+    def generate_buy_sell_signals(self, results):
+        """Generate buy/sell signals based on technical indicators."""
+        try:
+            # Example: Using RSI and Moving Averages for signals
+            buy_signals = []
+            sell_signals = []
+
+            for i in range(1, len(results)):
+                # Buy signal: RSI < 30 (oversold) and price crosses above SMA
+                if results['RSI'].iloc[i] < 30 and results['Close'].iloc[i] > results['SMA_20'].iloc[i]:
+                    buy_signals.append(results.index[i])
+                    logging.info(f"Buy signal generated for {self.ticker_symbol} on {results.index[i]}")
+
+                # Sell signal: RSI > 70 (overbought) and price crosses below SMA
+                elif results['RSI'].iloc[i] > 70 and results['Close'].iloc[i] < results['SMA_20'].iloc[i]:
+                    sell_signals.append(results.index[i])
+                    logging.info(f"Sell signal generated for {self.ticker_symbol} on {results.index[i]}")
+
+            # Save signals to a file
+            signals_df = pd.DataFrame({
+                'Buy Signals': pd.Series(buy_signals),
+                'Sell Signals': pd.Series(sell_signals)
+            })
+            signals_file_path = os.path.join(self.output_dir, f'{self.ticker_symbol}_signals.csv')
+            signals_df.to_csv(signals_file_path, index=False)
+            logging.info(f"Buy/Sell signals saved to {signals_file_path}")
+
+        except Exception as e:
+            logging.error(f"Error generating buy/sell signals for {self.ticker_symbol}: {str(e)}")
 
     def _create_technical_analysis_plot(self, results, timestamp, tech_analysis_dir):
         """Create technical analysis visualization"""
@@ -2001,11 +2055,7 @@ class StockAnalyzer:
             logging.error(f"Error fetching options data: {str(e)}")
             return None
 
-import os
-import logging
-from datetime import datetime, timedelta
 
-# Other imports...
 
 def main():
   # Set up logging
