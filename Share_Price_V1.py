@@ -1113,95 +1113,154 @@ class StockAnalyzer:
             logging.error(f"Error generating buy/sell signals for {self.ticker_symbol}: {str(e)}")
 
     def _create_technical_analysis_plot(self, results, timestamp, tech_analysis_dir):
-        """Create technical analysis visualization with candlesticks and MACD"""
+        """Create interactive technical analysis visualization with candlesticks"""
         try:
-            plt.style.use('seaborn-v0_8-darkgrid')
+            import plotly.graph_objects as go
+            from plotly.subplots import make_subplots
 
-            # Create figure with subplots
-            fig = plt.figure(figsize=(15, 12))
-            gs = fig.add_gridspec(3, 1, height_ratios=[2, 1, 1])
+            # Create figure with secondary y-axis
+            fig = make_subplots(rows=3, cols=1,
+                                shared_xaxes=True,
+                                vertical_spacing=0.05,
+                                row_heights=[0.6, 0.2, 0.2],
+                                subplot_titles=(f'{self.ticker_symbol} Price Action',
+                                                'RSI',
+                                                'MACD'))
 
-            # Main price chart with candlesticks
-            ax1 = fig.add_subplot(gs[0])
-
-            # Plot candlesticks
-            width = np.timedelta64(12, 'h')  # Adjust candlestick width
-            up = self.stock_data[self.stock_data.Close >= self.stock_data.Open]
-            down = self.stock_data[self.stock_data.Close < self.stock_data.Open]
-
-            # Up candlesticks
-            ax1.bar(up.index, up.Close - up.Open, width, bottom=up.Open, color='g', alpha=0.6)
-            ax1.bar(up.index, up.High - up.Close, width / 5, bottom=up.Close, color='g', alpha=0.6)
-            ax1.bar(up.index, up.Low - up.Open, width / 5, bottom=up.Open, color='g', alpha=0.6)
-
-            # Down candlesticks
-            ax1.bar(down.index, down.Close - down.Open, width, bottom=down.Open, color='r', alpha=0.6)
-            ax1.bar(down.index, down.High - down.Open, width / 5, bottom=down.Open, color='r', alpha=0.6)
-            ax1.bar(down.index, down.Low - down.Close, width / 5, bottom=down.Close, color='r', alpha=0.6)
+            # Add candlestick chart
+            candlestick = go.Candlestick(
+                x=self.stock_data.index,
+                open=self.stock_data['Open'],
+                high=self.stock_data['High'],
+                low=self.stock_data['Low'],
+                close=self.stock_data['Close'],
+                name='Candlesticks',
+                hovertext=[
+                    f'Date: {date}<br>'
+                    f'Open: {open:.2f}<br>'
+                    f'High: {high:.2f}<br>'
+                    f'Low: {low:.2f}<br>'
+                    f'Close: {close:.2f}<br>'
+                    f'Volume: {volume:,.0f}'
+                    for date, open, high, low, close, volume in zip(
+                        self.stock_data.index,
+                        self.stock_data['Open'],
+                        self.stock_data['High'],
+                        self.stock_data['Low'],
+                        self.stock_data['Close'],
+                        self.stock_data['Volume']
+                    )
+                ],
+                hoverinfo='text'
+            )
+            fig.add_trace(candlestick, row=1, col=1)
 
             # Add Bollinger Bands
             if all(col in results.columns for col in ['BB_High', 'BB_Low', 'BB_Mid']):
-                ax1.plot(results.index, results['BB_High'], 'b--', alpha=0.5, label='BB Upper')
-                ax1.plot(results.index, results['BB_Mid'], 'b-', alpha=0.5, label='BB Middle')
-                ax1.plot(results.index, results['BB_Low'], 'b--', alpha=0.5, label='BB Lower')
+                fig.add_trace(
+                    go.Scatter(
+                        x=results.index,
+                        y=results['BB_High'],
+                        name='BB Upper',
+                        line=dict(color='gray', dash='dash'),
+                        opacity=0.5
+                    ), row=1, col=1)
 
-            ax1.set_title(f'{self.ticker_symbol} Technical Analysis')
-            ax1.set_ylabel('Price')
-            ax1.grid(True, alpha=0.3)
-            ax1.legend(loc='upper left')
+                fig.add_trace(
+                    go.Scatter(
+                        x=results.index,
+                        y=results['BB_Low'],
+                        name='BB Lower',
+                        line=dict(color='gray', dash='dash'),
+                        opacity=0.5,
+                        fill='tonexty'
+                    ), row=1, col=1)
 
-            # RSI subplot
-            ax2 = fig.add_subplot(gs[1], sharex=ax1)
+            # Add Moving Averages
+            if 'EMA_20' in results.columns:
+                fig.add_trace(
+                    go.Scatter(
+                        x=results.index,
+                        y=results['EMA_20'],
+                        name='EMA 20',
+                        line=dict(color='orange')
+                    ), row=1, col=1)
+
+            if 'SMA_50' in results.columns:
+                fig.add_trace(
+                    go.Scatter(
+                        x=results.index,
+                        y=results['SMA_50'],
+                        name='SMA 50',
+                        line=dict(color='blue')
+                    ), row=1, col=1)
+
+            # Add RSI
             if 'RSI' in results.columns:
-                ax2.plot(results.index, results['RSI'], 'purple', label='RSI')
-                ax2.axhline(y=70, color='r', linestyle='--', alpha=0.5)
-                ax2.axhline(y=30, color='g', linestyle='--', alpha=0.5)
-                ax2.set_ylabel('RSI')
-                ax2.grid(True, alpha=0.3)
-                ax2.legend(loc='upper left')
+                fig.add_trace(
+                    go.Scatter(
+                        x=results.index,
+                        y=results['RSI'],
+                        name='RSI',
+                        line=dict(color='purple')
+                    ), row=2, col=1)
 
-            # MACD subplot
-            ax3 = fig.add_subplot(gs[2], sharex=ax1)
+                # Add RSI levels
+                fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
+                fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
+
+            # Add MACD
             if all(col in results.columns for col in ['MACD', 'MACD_Signal', 'MACD_Histogram']):
-                # Plot MACD Histogram
-                colors = np.where(results['MACD_Histogram'] >= 0, 'g', 'r')
-                ax3.bar(results.index, results['MACD_Histogram'], color=colors, alpha=0.5,
-                        label='MACD Histogram', width=width)
+                # MACD Line
+                fig.add_trace(
+                    go.Scatter(
+                        x=results.index,
+                        y=results['MACD'],
+                        name='MACD',
+                        line=dict(color='blue')
+                    ), row=3, col=1)
 
-                # Plot MACD and Signal lines
-                ax3.plot(results.index, results['MACD'], 'b-', label='MACD', linewidth=1.5)
-                ax3.plot(results.index, results['MACD_Signal'], 'orange', label='Signal', linewidth=1.5)
+                # Signal Line
+                fig.add_trace(
+                    go.Scatter(
+                        x=results.index,
+                        y=results['MACD_Signal'],
+                        name='Signal',
+                        line=dict(color='orange')
+                    ), row=3, col=1)
 
-                # Add crossover points
-                crossover_points = results.index[
-                    (results['MACD'] > results['MACD_Signal']) &
-                    (results['MACD'].shift(1) <= results['MACD_Signal'].shift(1))
-                    ]
-                crossunder_points = results.index[
-                    (results['MACD'] < results['MACD_Signal']) &
-                    (results['MACD'].shift(1) >= results['MACD_Signal'].shift(1))
-                    ]
+                # Histogram
+                colors = ['red' if val < 0 else 'green' for val in results['MACD_Histogram']]
+                fig.add_trace(
+                    go.Bar(
+                        x=results.index,
+                        y=results['MACD_Histogram'],
+                        name='Histogram',
+                        marker_color=colors
+                    ), row=3, col=1)
 
-                # Plot crossover points
-                ax3.scatter(crossover_points, results.loc[crossover_points, 'MACD'],
-                            color='g', marker='^', s=100, label='Bullish Crossover')
-                ax3.scatter(crossunder_points, results.loc[crossunder_points, 'MACD'],
-                            color='r', marker='v', s=100, label='Bearish Crossover')
+            # Update layout
+            fig.update_layout(
+                title=f'{self.ticker_symbol} Technical Analysis',
+                yaxis_title='Price',
+                yaxis2_title='RSI',
+                yaxis3_title='MACD',
+                xaxis_rangeslider_visible=False,
+                height=1000,
+                showlegend=True,
+                template='plotly_dark'
+            )
 
-                ax3.set_ylabel('MACD')
-                ax3.grid(True, alpha=0.3)
-                ax3.legend(loc='upper left')
+            # Save as interactive HTML
+            html_file = os.path.join(tech_analysis_dir, f'interactive_analysis_{timestamp}.html')
+            fig.write_html(html_file)
 
-            # Format x-axis
-            plt.xticks(rotation=45)
-            plt.tight_layout()
+            # Also save as static image for documentation
+            png_file = os.path.join(tech_analysis_dir, f'technical_analysis_plot_{timestamp}.png')
+            fig.write_image(png_file)
 
-            # Save the plot
-            plot_file = os.path.join(tech_analysis_dir, f'technical_analysis_plot_{timestamp}.png')
-            plt.savefig(plot_file, dpi=300, bbox_inches='tight')
-            plt.close()
-
-            logging.info(f"Technical analysis plot saved to: {plot_file}")
+            logging.info(f"Interactive technical analysis saved to: {html_file}")
+            logging.info(f"Static technical analysis plot saved to: {png_file}")
 
         except Exception as e:
             logging.error(f"Error creating technical analysis plot: {str(e)}", exc_info=True)
