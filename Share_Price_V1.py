@@ -32,8 +32,6 @@ from tensorflow.keras.optimizers import Adam
 import pandas_datareader as pdr
 from fredapi import Fred
 import mibian
-import logging
-from datetime import datetime, timedelta
 
 
 def parse_date(date_str):
@@ -976,84 +974,75 @@ class StockAnalyzer:
             logging.error(f"Error generating buy/sell signals for {self.ticker_symbol}: {str(e)}")
 
     def _create_technical_analysis_plot(self, results, timestamp, tech_analysis_dir):
-        """Create technical analysis visualization"""
+        """Create technical analysis visualization with candlesticks and MACD histogram"""
         try:
-            plt.style.use('seaborn-v0_8-deep')
+            plt.style.use('seaborn-v0_8-darkgrid')
 
-            # Create subplots - now with 4 subplots to accommodate MACD
-            fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(15, 20), height_ratios=[3, 1, 1, 1])
+            # Create figure with subplots
+            fig = plt.figure(figsize=(15, 12))
+            gs = fig.add_gridspec(3, 1, height_ratios=[2, 1, 1])
 
-            # ======================
-            # Price Plot (Main Chart)
-            # ======================
-            ax1.plot(results.index, results['Close'], label='Close Price', linewidth=1)
+            # Main price chart with candlesticks
+            ax1 = fig.add_subplot(gs[0])
 
-            # ======================
-            # Moving Averages (EMA/SMA)
-            # ======================
+            # Plot candlesticks
+            width = np.timedelta64(12, 'h')  # Adjust candlestick width
+            up = self.stock_data[self.stock_data.Close >= self.stock_data.Open]
+            down = self.stock_data[self.stock_data.Close < self.stock_data.Open]
+
+            # Up candlesticks
+            ax1.bar(up.index, up.Close - up.Open, width, bottom=up.Open, color='g', alpha=0.6)
+            ax1.bar(up.index, up.High - up.Close, width / 5, bottom=up.Close, color='g', alpha=0.6)
+            ax1.bar(up.index, up.Low - up.Open, width / 5, bottom=up.Open, color='g', alpha=0.6)
+
+            # Down candlesticks
+            ax1.bar(down.index, down.Close - down.Open, width, bottom=down.Open, color='r', alpha=0.6)
+            ax1.bar(down.index, down.High - down.Open, width / 5, bottom=down.Open, color='r', alpha=0.6)
+            ax1.bar(down.index, down.Low - down.Close, width / 5, bottom=down.Close, color='r', alpha=0.6)
+
+            # Add Bollinger Bands
+            if all(col in results.columns for col in ['BB_High', 'BB_Low', 'BB_Mid']):
+                ax1.plot(results.index, results['BB_High'], 'b--', alpha=0.5, label='BB Upper')
+                ax1.plot(results.index, results['BB_Mid'], 'b-', alpha=0.5, label='BB Middle')
+                ax1.plot(results.index, results['BB_Low'], 'b--', alpha=0.5, label='BB Lower')
+
+            # Add Moving Averages
             if 'EMA_20' in results.columns:
-                ax1.plot(results.index, results['EMA_20'], label='EMA 20', linewidth=1)
+                ax1.plot(results.index, results['EMA_20'], 'orange', label='EMA 20', alpha=0.7)
             if 'SMA_50' in results.columns:
-                ax1.plot(results.index, results['SMA_50'], label='SMA 50', linewidth=1)
+                ax1.plot(results.index, results['SMA_50'], 'purple', label='SMA 50', alpha=0.7)
 
-            # ======================
-            # Bollinger Bands
-            # ======================
-            if all(col in results.columns for col in ['BB_High', 'BB_Low']):
-                ax1.fill_between(results.index,
-                                 results['BB_High'],
-                                 results['BB_Low'],
-                                 alpha=0.1,
-                                 label='Bollinger Bands')
-
-            # ======================
-            # Main Chart Settings
-            # ======================
-            ax1.set_title(f'{self.ticker_symbol} Technical Analysis Overview')
-            ax1.set_xlabel('')
+            ax1.set_title(f'{self.ticker_symbol} Technical Analysis')
             ax1.set_ylabel('Price')
-            ax1.legend(loc='upper left')
             ax1.grid(True, alpha=0.3)
+            ax1.legend(loc='upper left')
 
-            # ======================
-            # RSI
-            # ======================
+            # RSI subplot
+            ax2 = fig.add_subplot(gs[1], sharex=ax1)
             if 'RSI' in results.columns:
-                ax2.plot(results.index, results['RSI'], label='RSI', color='purple')
+                ax2.plot(results.index, results['RSI'], 'purple', label='RSI')
                 ax2.axhline(y=70, color='r', linestyle='--', alpha=0.5)
                 ax2.axhline(y=30, color='g', linestyle='--', alpha=0.5)
                 ax2.set_ylabel('RSI')
-                ax2.set_xlabel('')
                 ax2.grid(True, alpha=0.3)
                 ax2.legend(loc='upper left')
 
-            # ======================
-            # On-Balance Volume (OBV)
-            # ======================
-            if 'OBV' in results.columns:
-                ax3.plot(results.index, results['OBV'], label='OBV', color='orange')
-                ax3.set_ylabel('OBV')
-                ax3.set_xlabel('')
+            # MACD subplot with histogram
+            ax3 = fig.add_subplot(gs[2], sharex=ax1)
+            if all(col in results.columns for col in ['MACD', 'MACD_Signal', 'MACD_Histogram']):
+                # Plot MACD Histogram
+                colors = np.where(results['MACD_Histogram'] >= 0, 'g', 'r')
+                ax3.bar(results.index, results['MACD_Histogram'], color=colors, alpha=0.5, label='MACD Histogram')
+
+                # Plot MACD and Signal lines
+                ax3.plot(results.index, results['MACD'], 'b-', label='MACD')
+                ax3.plot(results.index, results['MACD_Signal'], 'orange', label='Signal')
+                ax3.set_ylabel('MACD')
                 ax3.grid(True, alpha=0.3)
                 ax3.legend(loc='upper left')
 
-            # ======================
-            # MACD
-            # ======================
-            if all(col in results.columns for col in ['MACD', 'MACD_Signal']):
-                ax4.plot(results.index, results['MACD'], label='MACD', color='blue')
-                ax4.plot(results.index, results['MACD_Signal'], label='Signal Line', color='red')
-
-                # Optional: Add MACD histogram
-                if 'MACD_Histogram' in results.columns:
-                    ax4.bar(results.index, results['MACD_Histogram'],
-                            label='MACD Histogram', color='gray', alpha=0.3, width=1)
-
-                ax4.set_ylabel('MACD')
-                ax4.set_xlabel('Date')  # Only show x-label on bottom subplot
-                ax4.grid(True, alpha=0.3)
-                ax4.legend(loc='upper left')
-
+            # Format x-axis
+            plt.xticks(rotation=45)
             plt.tight_layout()
 
             # Save the plot
