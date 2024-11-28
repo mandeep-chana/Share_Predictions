@@ -1,138 +1,120 @@
-# Stock Analysis Tool
+# Stock Market Analysis Tool 🚀
 
-## Project Overview
-A comprehensive Python-based stock analysis tool that performs technical analysis, price forecasting, backtesting, and news sentiment analysis. The tool fetches real-time stock data, performs various analyses, and generates detailed visualizations and reports to assist in making informed investment decisions.
+## Overview
+
+A comprehensive stock market analysis tool that combines technical analysis, machine learning predictions, and market sentiment analysis to provide detailed insights for stock trading decisions.
 
 ## Features
-- Technical Analysis
-  - Moving Averages (SMA, EMA)
-  - RSI (Relative Strength Index)
-  - MACD (Moving Average Convergence Divergence)
-  - Bollinger Bands
-  - LSTM-based Price Predictions
-  - Automated Trading Strategy Backtesting
-  - Economic Indicators Analysis
-  - Options Data Analysis
-  - News Sentiment Analysis
-  - Multi-Exchange Support (NYSE, NASDAQ, LSE, etc.)
 
-- **Price Forecasting**
-  - Prophet model integration
-  - 180-day price predictions
-  - Trend and seasonality analysis
-  - Confidence intervals
-
-- **Backtesting**
-  - Moving Average Crossover strategy
-  - Performance metrics
-  - Trade visualization
-  - Equity curve analysis
-
-- **News Sentiment Analysis**
-  - Financial news aggregation
-  - Sentiment scoring
-  - Multiple news sources integration
+- **Technical Analysis**
+  - Candlestick charts with interactive hover information
+  - Multiple technical indicators (RSI, MACD, Bollinger Bands)
+  - Moving averages (SMA, EMA)
+  - Volume analysis
+  - Parabolic SAR
+- **Machine Learning Predictions**
+  - LSTM-based price predictions
+  - Prophet forecasting
+  - Customizable sequence lengths and parameters
+- **Trading Strategies**
+  - SMA Crossover with Risk Management
+  - Bollinger Band Strategy with RSI confirmation
+  - Strategy optimization using grid search
+  - Comprehensive backtesting
+- **Market Analysis**
+  - Economic indicators tracking
+  - Options data analysis
+  - Market regime detection
+  - Sentiment analysis from news
 
 ## Installation
-1. Clone the repository:
-```bash
-git clone https://github.com/yourusername/stock-analysis-tool.git
-cd stock-analysis-tool
-```
 
-2. Create a virtual environment:
-```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
+### Prerequisites
 
-3. Install required packages:
-```bash
+- Python 3.8+
+- pip package manager
+
+### Dependencies
+
+```
 pip install -r requirements.txt
 ```
 
-## Usage
-1. Add stock tickers to `tickers.txt`:
-```
-AAPL
-MSFT
-GOOGL
-```
+Required packages:
 
-2. Run the analysis:
-```bash
-python Share_Price_V1.py
-```
-
-## Dependencies
+- yfinance
 - pandas
 - numpy
-- yfinance
+- tensorflow
 - prophet
+- plotly
 - beautifulsoup4
-- matplotlib
-- textblob
+- scikit-learn
 - ta
 - backtesting
-- requests
-- logging
+- matplotlib
+- textblob
 
-## File Structure
+## Usage
+
+1. Create a `tickers.txt` file with your stock symbols:
+
 ```
-stock-analysis-tool/
-├── Share_Price_V1.py
-├── news_sources.py
-├── company_sources.py
-├── tickers.txt
-├── requirements.txt
-├── output/
-│   ├── TICKER_SYMBOL/
-│   │   ├── technical_analysis/
-│   │   ├── forecast_plots/
-│   │   └── backtest_results/
-└── logs/
-    └── stock_analyzer.log
+AAPLMSFTGOOGL
+```
+
+1. Run the main script:
+
+```
+python stock_analyzer.py
+```
+
+1. Enter date range when prompted or press Enter for default (last 2 years)
+
+## Output Structure
+
+```
+output/├── {ticker}/│   ├── technical_analysis/│   │   ├── interactive_analysis_{timestamp}.html│   │   └── technical_analysis_plot_{timestamp}.png│   ├── lstm_analysis/│   │   ├── lstm_prediction.png│   │   └── lstm_metrics.json│   ├── forecast_plots/│   │   ├── forecast_plot.png│   │   └── forecast_components.png│   ├── strategies/│   │   ├── strategy_comparison.json│   │   └── optimization_results.csv│   └── market_analysis.json
 ```
 
 ## Configuration
-- Modify `news_sources.py` to add/remove news sources
-- Adjust technical analysis parameters in `perform_technical_analysis()`
-- Configure Prophet model parameters in `forecast_prices()`
-- Customize backtesting strategy in `SmaCross` class
 
-## Output
-The tool generates the following outputs for each analyzed stock:
+- Adjust technical analysis parameters in the respective strategy classes
+- Modify LSTM sequence length and architecture in `LSTMPredictor` class
+- Configure risk parameters in `SmaCrossWithRisk` strategy
 
-### Technical Analysis
-- Technical indicators CSV file
-- Summary statistics
-- Visualization plots with price, indicators, and signals
+## Logging
 
-### Forecasting
-- Price predictions CSV
-- Forecast plots with confidence intervals
-- Component analysis plots (trend, seasonality)
+- Logs are stored in the `logs` directory
+- Uses rotating file handler (10MB per file, 5 backup files)
+- Includes both file and console logging
 
-### Backtesting
-- Performance metrics
-- Trade statistics
-- Equity curve visualization
-- Strategy performance summary
+## Error Handling
 
-### Logs
-- Detailed execution logs
-- Error tracking
-- Performance metrics
+- Comprehensive error handling for data fetching
+- Validation of input data
+- Graceful degradation when services are unavailable
 
 ## Contributing
+
 1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
+1. Create your feature branch (`git checkout -b feature/AmazingFeature`)
+1. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
+1. Push to the branch (`git push origin feature/AmazingFeature`)
+1. Open a Pull Request
 
 ## License
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+This project is licensed under the MIT License - see the LICENSE file for details
 
 ## Disclaimer
-This tool is for educational and research purposes only. Always perform your own due diligence before making investment decisions. The creators are not responsible for any financial losses incurred using this tool.
+
+This tool is for educational and research purposes only. Always conduct your own research and consult with financial advisors before making investment decisions.
+
+## Acknowledgments
+
+- Data provided by Yahoo Finance
+- Technical analysis indicators from `ta` library
+- Machine learning implementations using TensorFlow and Prophet
+
+<br>
