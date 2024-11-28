@@ -158,135 +158,131 @@ def setup_logging():
 setup_logging()
 
 
-class LSTMPredictor:
-    def __init__(self, sequence_length=60):
-        self.sequence_length = sequence_length
-        self.scaler = MinMaxScaler(feature_range=(0, 1))
-        self.model = None
-
-        # Suppress TensorFlow warnings
-        tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
-        os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
-
-    def create_sequences(self, data):
-        """Create sequences for LSTM input"""
-        X, y = [], []
-        data = np.array(data)
-        for i in range(len(data) - self.sequence_length):
-            X.append(data[i:(i + self.sequence_length)])
-            y.append(data[i + self.sequence_length])
-        return np.array(X), np.array(y)
-
-    def build_model(self, input_shape):
-        """Build LSTM model architecture"""
-        tf.keras.backend.clear_session()  # Clear previous session
-
-        model = Sequential([
-            LSTM(units=50, activation='relu', input_shape=input_shape,
-                 return_sequences=True, kernel_initializer='glorot_uniform'),
-            Dropout(0.2),
-            LSTM(units=50, activation='relu', return_sequences=False),
-            Dropout(0.2),
-            Dense(units=25, activation='relu'),
-            Dense(units=1)
-        ])
-
-        # Use Adam optimizer with reduced learning rate
-        optimizer = Adam(learning_rate=0.001, beta_1=0.9, beta_2=0.999)
-
-        # Compile model with Huber loss for robustness
-        model.compile(optimizer=optimizer, loss='huber')
-
-        return model
-
-    def prepare_data(self, data):
-        """Prepare data for LSTM model"""
-        # Ensure data is numpy array and reshape
-        data = np.array(data).reshape(-1, 1)
-
-        # Scale the data
-        scaled_data = self.scaler.fit_transform(data)
-
-        # Create sequences
-        X, y = self.create_sequences(scaled_data)
-
-        # Reshape X to (samples, time steps, features)
-        X = X.reshape((X.shape[0], X.shape[1], 1))
-
-        # Split data
-        train_size = int(len(X) * 0.8)
-        X_train, X_test = X[:train_size], X[train_size:]
-        y_train, y_test = y[:train_size], y[train_size:]
-
-        return X_train, X_test, y_train, y_test
-
-    def train(self, data, epochs=50, batch_size=32):
-        """Train LSTM model"""
-        try:
-            # Prepare data
-            X_train, X_test, y_train, y_test = self.prepare_data(data)
-
-            # Build model
-            self.model = self.build_model((self.sequence_length, 1))
-
-            # Early stopping callback
-            early_stopping = tf.keras.callbacks.EarlyStopping(
-                monitor='val_loss',
-                patience=10,
-                restore_best_weights=True
-            )
-
-            # Reduce learning rate callback
-            reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(
-                monitor='val_loss',
-                factor=0.2,
-                patience=5,
-                min_lr=0.0001
-            )
-
-            # Train model
-            history = self.model.fit(
-                X_train, y_train,
-                epochs=epochs,
-                batch_size=batch_size,
-                validation_data=(X_test, y_test),
-                callbacks=[early_stopping, reduce_lr],
-                verbose=1,
-                shuffle=False
-            )
-
-            return history, (X_test, y_test)
-
-        except Exception as e:
-            logging.error(f"Error in LSTM training: {str(e)}")
+def perform_lstm_analysis(self):
+    """Perform LSTM-based time series analysis"""
+    try:
+        if self.stock_data is None or self.stock_data.empty:
+            logging.warning(f"No data available for LSTM analysis of {self.ticker_symbol}")
             return None, None
 
-    def predict(self, data):
-        """Make predictions using trained model"""
+        # Check if we have enough data points
+        data = self.stock_data['Close'].values
+        if len(data) < 120:  # Minimum required length
+            logging.warning(f"Insufficient data points ({len(data)}) for LSTM analysis. Minimum required: 120")
+            return None, None
+
+        logging.info(f"Performing LSTM analysis for {self.ticker_symbol}...")
+
+        # Initialize LSTM predictor
+        lstm_predictor = LSTMPredictor(sequence_length=60)
+
         try:
-            if self.model is None:
-                raise ValueError("Model has not been trained yet")
+            # Train model and get predictions
+            history, (X_test, y_test) = lstm_predictor.train(data)
 
-            # Prepare data for prediction
-            data = np.array(data).reshape(-1, 1)
-            scaled_data = self.scaler.transform(data)
-
-            # Create sequences
-            X, _ = self.create_sequences(scaled_data)
-            X = X.reshape((X.shape[0], X.shape[1], 1))
+            if history is None or X_test is None or y_test is None:
+                logging.error("LSTM training failed")
+                return None, None
 
             # Make predictions
-            scaled_predictions = self.model.predict(X, verbose=0)
+            predictions = lstm_predictor.predict(data)
 
-            # Inverse transform predictions
-            predictions = self.scaler.inverse_transform(scaled_predictions)
+            if predictions is None:
+                logging.error("LSTM prediction failed")
+                return None, None
 
-            return predictions
+            # Calculate metrics only if we have valid predictions and test data
+            metrics = {}
+            if len(predictions) >= len(y_test):
+                try:
+                    # Transform predictions to match test data scale
+                    scaled_predictions = lstm_predictor.scaler.transform(predictions[-len(y_test):].reshape(-1, 1))
+                    scaled_y_test = lstm_predictor.scaler.transform(y_test.reshape(-1, 1))
+
+                    mse = mean_squared_error(scaled_y_test, scaled_predictions)
+                    mae = mean_absolute_error(scaled_y_test, scaled_predictions)
+                    rmse = np.sqrt(mse)
+
+                    metrics = {
+                        'MSE': float(mse),
+                        'MAE': float(mae),
+                        'RMSE': float(rmse)
+                    }
+                except Exception as e:
+                    logging.error(f"Error calculating metrics: {str(e)}")
+                    metrics = {
+                        'MSE': None,
+                        'MAE': None,
+                        'RMSE': None
+                    }
+
+            # Create visualization
+            self._create_lstm_plot(predictions, data, metrics)
+
+            return predictions, metrics
 
         except Exception as e:
-            logging.error(f"Error in LSTM prediction: {str(e)}")
-            return None
+            logging.error(f"Error in LSTM processing: {str(e)}")
+            return None, None
 
+    except Exception as e:
+        logging.error(f"Error performing LSTM analysis for {self.ticker_symbol}: {str(e)}", exc_info=True)
+        return None, None
+
+def _create_lstm_plot(self, predictions, actual_data, metrics):
+    """Create and save LSTM analysis visualization"""
+    try:
+        plt.figure(figsize=(15, 8))
+
+        # Plot actual data
+        plt.plot(self.stock_data.index[-len(predictions):],
+                actual_data[-len(predictions):],
+                label='Actual Price',
+                alpha=0.6,
+                color='blue')
+
+        # Plot predictions
+        plt.plot(self.stock_data.index[-len(predictions):],
+                predictions,
+                label='LSTM Prediction',
+                alpha=0.6,
+                color='red')
+
+        plt.title(f'{self.ticker_symbol} LSTM Price Prediction')
+        plt.xlabel('Date')
+        plt.ylabel('Price')
+
+        # Add metrics to plot if available
+        if metrics and all(v is not None for v in metrics.values()):
+            metric_text = f"RMSE: {metrics['RMSE']:.2f}\nMAE: {metrics['MAE']:.2f}"
+            plt.text(0.02, 0.98, metric_text,
+                    transform=plt.gca().transAxes,
+                    verticalalignment='top',
+                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+
+        # Save results
+        lstm_dir = os.path.join(self.output_dir, 'lstm_analysis')
+        os.makedirs(lstm_dir, exist_ok=True)
+
+        # Save plot
+        plot_file = os.path.join(lstm_dir, f'{self.ticker_symbol}_lstm_prediction.png')
+        plt.savefig(plot_file, dpi=300, bbox_inches='tight')
+        plt.close()
+
+        # Save metrics if available
+        if metrics:
+            metrics_file = os.path.join(lstm_dir, f'{self.ticker_symbol}_lstm_metrics.json')
+            with open(metrics_file, 'w') as f:
+                json.dump(metrics, f, indent=4)
+
+        logging.info(f"LSTM analysis completed for {self.ticker_symbol}")
+        logging.info(f"Results saved to: {lstm_dir}")
+
+    except Exception as e:
+        logging.error(f"Error creating LSTM plot: {str(e)}")
 
 class BollingerBandStrategy(Strategy):
     """Bollinger Band breakout strategy with RSI confirmation"""
@@ -542,7 +538,150 @@ def perform_backtest(self):
     except Exception as e:
         logging.error(f"Error in backtesting: {str(e)}")
         return None
+class LSTMPredictor:
+    def __init__(self, sequence_length=60):
+        """Initialize LSTM predictor with given sequence length"""
+        self.sequence_length = sequence_length
+        self.scaler = MinMaxScaler(feature_range=(0, 1))
+        self.model = None
 
+        # Suppress TensorFlow warnings
+        tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
+        os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
+    def create_sequences(self, data):
+        """Create sequences for LSTM input"""
+        try:
+            X, y = [], []
+            data = np.array(data)
+
+            if len(data) <= self.sequence_length:
+                raise ValueError(f"Data length ({len(data)}) is insufficient for sequence length ({self.sequence_length})")
+
+            for i in range(len(data) - self.sequence_length):
+                X.append(data[i:(i + self.sequence_length)])
+                y.append(data[i + self.sequence_length])
+            return np.array(X), np.array(y)
+        except Exception as e:
+            logging.error(f"Error creating sequences: {str(e)}")
+            return None, None
+
+    def prepare_data(self, data):
+        """Prepare data for LSTM model"""
+        try:
+            # Validate input data length
+            if len(data) < self.sequence_length * 2:
+                raise ValueError(f"Insufficient data points: {len(data)}. Need at least {self.sequence_length * 2} points.")
+
+            # Ensure data is numpy array and reshape
+            data = np.array(data).reshape(-1, 1)
+
+            # Scale the data
+            scaled_data = self.scaler.fit_transform(data)
+
+            # Create sequences
+            X, y = self.create_sequences(scaled_data)
+            if X is None or y is None:
+                raise ValueError("Failed to create sequences")
+
+            # Reshape X to (samples, time steps, features)
+            X = X.reshape((X.shape[0], X.shape[1], 1))
+
+            # Split data
+            train_size = int(len(X) * 0.8)
+            X_train = X[:train_size]
+            X_test = X[train_size:]
+            y_train = y[:train_size]
+            y_test = y[train_size:]
+
+            return X_train, X_test, y_train, y_test
+
+        except Exception as e:
+            logging.error(f"Error preparing LSTM data: {str(e)}")
+            return None, None, None, None
+
+    def train(self, data):
+        """Train LSTM model"""
+        try:
+            # Prepare data
+            X_train, X_test, y_train, y_test = self.prepare_data(data)
+
+            if X_train is None or y_train is None:
+                raise ValueError("Data preparation failed")
+
+            # Build model
+            self.model = Sequential([
+                LSTM(units=50, activation='relu', input_shape=(self.sequence_length, 1),
+                     return_sequences=True),
+                Dropout(0.2),
+                LSTM(units=50, activation='relu', return_sequences=False),
+                Dropout(0.2),
+                Dense(units=25, activation='relu'),
+                Dense(units=1)
+            ])
+
+            # Compile model
+            optimizer = Adam(learning_rate=0.001)
+            self.model.compile(optimizer=optimizer, loss='huber')
+
+            # Early stopping callback
+            early_stopping = tf.keras.callbacks.EarlyStopping(
+                monitor='val_loss',
+                patience=10,
+                restore_best_weights=True
+            )
+
+            # Reduce learning rate callback
+            reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(
+                monitor='val_loss',
+                factor=0.2,
+                patience=5,
+                min_lr=0.0001
+            )
+
+            # Train model
+            history = self.model.fit(
+                X_train, y_train,
+                epochs=50,
+                batch_size=32,
+                validation_data=(X_test, y_test),
+                callbacks=[early_stopping, reduce_lr],
+                verbose=1,
+                shuffle=False
+            )
+
+            return history, (X_test, y_test)
+
+        except Exception as e:
+            logging.error(f"Error in LSTM training: {str(e)}")
+            return None, (None, None)
+
+    def predict(self, data):
+        """Make predictions using trained model"""
+        try:
+            if self.model is None:
+                raise ValueError("Model has not been trained yet")
+
+            # Prepare data for prediction
+            data = np.array(data).reshape(-1, 1)
+            scaled_data = self.scaler.transform(data)
+
+            # Create sequences
+            X, _ = self.create_sequences(scaled_data)
+            if X is None:
+                raise ValueError("Failed to create sequences for prediction")
+
+            X = X.reshape((X.shape[0], X.shape[1], 1))
+
+            # Make predictions
+            scaled_predictions = self.model.predict(X, verbose=0)
+            predictions = self.scaler.inverse_transform(scaled_predictions)
+
+            return predictions
+
+        except Exception as e:
+            logging.error(f"Error in LSTM prediction: {str(e)}")
+            return None
 
 class StockAnalyzer:
     # Class-level constants
@@ -974,7 +1113,7 @@ class StockAnalyzer:
             logging.error(f"Error generating buy/sell signals for {self.ticker_symbol}: {str(e)}")
 
     def _create_technical_analysis_plot(self, results, timestamp, tech_analysis_dir):
-        """Create technical analysis visualization with candlesticks and MACD histogram"""
+        """Create technical analysis visualization with candlesticks and MACD"""
         try:
             plt.style.use('seaborn-v0_8-darkgrid')
 
@@ -1006,12 +1145,6 @@ class StockAnalyzer:
                 ax1.plot(results.index, results['BB_Mid'], 'b-', alpha=0.5, label='BB Middle')
                 ax1.plot(results.index, results['BB_Low'], 'b--', alpha=0.5, label='BB Lower')
 
-            # Add Moving Averages
-            if 'EMA_20' in results.columns:
-                ax1.plot(results.index, results['EMA_20'], 'orange', label='EMA 20', alpha=0.7)
-            if 'SMA_50' in results.columns:
-                ax1.plot(results.index, results['SMA_50'], 'purple', label='SMA 50', alpha=0.7)
-
             ax1.set_title(f'{self.ticker_symbol} Technical Analysis')
             ax1.set_ylabel('Price')
             ax1.grid(True, alpha=0.3)
@@ -1027,16 +1160,34 @@ class StockAnalyzer:
                 ax2.grid(True, alpha=0.3)
                 ax2.legend(loc='upper left')
 
-            # MACD subplot with histogram
+            # MACD subplot
             ax3 = fig.add_subplot(gs[2], sharex=ax1)
             if all(col in results.columns for col in ['MACD', 'MACD_Signal', 'MACD_Histogram']):
                 # Plot MACD Histogram
                 colors = np.where(results['MACD_Histogram'] >= 0, 'g', 'r')
-                ax3.bar(results.index, results['MACD_Histogram'], color=colors, alpha=0.5, label='MACD Histogram')
+                ax3.bar(results.index, results['MACD_Histogram'], color=colors, alpha=0.5,
+                        label='MACD Histogram', width=width)
 
                 # Plot MACD and Signal lines
-                ax3.plot(results.index, results['MACD'], 'b-', label='MACD')
-                ax3.plot(results.index, results['MACD_Signal'], 'orange', label='Signal')
+                ax3.plot(results.index, results['MACD'], 'b-', label='MACD', linewidth=1.5)
+                ax3.plot(results.index, results['MACD_Signal'], 'orange', label='Signal', linewidth=1.5)
+
+                # Add crossover points
+                crossover_points = results.index[
+                    (results['MACD'] > results['MACD_Signal']) &
+                    (results['MACD'].shift(1) <= results['MACD_Signal'].shift(1))
+                    ]
+                crossunder_points = results.index[
+                    (results['MACD'] < results['MACD_Signal']) &
+                    (results['MACD'].shift(1) >= results['MACD_Signal'].shift(1))
+                    ]
+
+                # Plot crossover points
+                ax3.scatter(crossover_points, results.loc[crossover_points, 'MACD'],
+                            color='g', marker='^', s=100, label='Bullish Crossover')
+                ax3.scatter(crossunder_points, results.loc[crossunder_points, 'MACD'],
+                            color='r', marker='v', s=100, label='Bearish Crossover')
+
                 ax3.set_ylabel('MACD')
                 ax3.grid(True, alpha=0.3)
                 ax3.legend(loc='upper left')
@@ -1127,6 +1278,7 @@ class StockAnalyzer:
                 stats = bt.run()
 
                 # Save optimized strategy results
+
                 optimized_results = {
                     'parameters': best_params,
                     'performance': {
@@ -2093,4 +2245,3 @@ def main():
 
 if __name__ == "__main__":
   main()
-
