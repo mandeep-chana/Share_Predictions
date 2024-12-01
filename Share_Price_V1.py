@@ -1103,33 +1103,76 @@ class StockAnalyzer:
         try:
             print(f"\nStarting analysis for {self.ticker_symbol}...")
 
-            # Existing analysis code...
+            # Data Collection
             self.fetch_company_info()
             self.fetch_financial_news()
             self.fetch_stock_data()
 
+            # Analysis
             if self.stock_data is not None and not self.stock_data.empty:
+                # Perform all analyses
                 results, summary = self.perform_technical_analysis()
                 lstm_predictions, lstm_metrics = self.perform_lstm_analysis()
                 forecast = self.forecast_prices()
                 backtest_results = self.perform_backtest()
 
-                # Store LSTM predictions for trading bot
-                self.lstm_predictions = lstm_predictions
-
-                # Store market analysis results
-                economic_data = self.fetch_economic_indicators()
-                options_data = self.fetch_options_data()
-                self.market_analysis = self.analyze_market_conditions(economic_data, options_data)
-
                 # Generate trading signals
                 self.generate_buy_sell_signals(results)
 
-                # Trigger trading bot with analysis results
-                self.trigger_trading_bot()
+                # Prepare analysis results for trading bot
+                analysis_results = {
+                    'ticker': self.ticker_symbol,
+                    'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'technical_indicators': {
+                        'rsi': float(results['RSI'].iloc[-1]) if 'RSI' in results else None,
+                        'macd': float(results['MACD'].iloc[-1]) if 'MACD' in results else None,
+                        'bb_upper': float(results['BB_High'].iloc[-1]) if 'BB_High' in results else None,
+                        'bb_lower': float(results['BB_Low'].iloc[-1]) if 'BB_Low' in results else None
+                    },
+                    'lstm_prediction': float(lstm_predictions[-1]) if lstm_predictions is not None else None,
+                    'forecast': float(forecast['yhat'].iloc[-1]) if forecast is not None else None,
+                    'backtest_results': backtest_results
+                }
+
+                # Save analysis results
+                analysis_file = os.path.join(self.output_dir, f'{self.ticker_symbol}_analysis.json')
+                with open(analysis_file, 'w') as f:
+                    json.dump(analysis_results, f, indent=4)
+
+                # Explicitly call trading bot
+                self.start_trading_bot(analysis_file)
+
+            else:
+                logging.warning(f"Cannot proceed with analysis for {self.ticker_symbol} due to missing stock data.")
 
         except Exception as e:
             logging.error(f"Error analyzing stock {self.ticker_symbol}: {str(e)}")
+
+    def start_trading_bot(self, analysis_file):
+        """Start trading bot with analysis results"""
+        try:
+            logging.info("Starting trading bot...")
+
+            # Import trading_bot module
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("trading_bot", "trading_bot.py")
+            trading_bot = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(trading_bot)
+
+            # Call trading bot's main function
+            trading_bot.main(analysis_file)
+            logging.info("Trading bot execution completed")
+
+        except Exception as e:
+            logging.error(f"Error starting trading bot: {str(e)}")
+            # Try subprocess method as backup
+            try:
+                import subprocess
+                subprocess.run(['python', 'trading_bot.py', analysis_file], check=True)
+                logging.info("Trading bot completed via subprocess")
+            except subprocess.SubprocessError as se:
+                logging.error(f"Error in subprocess trading bot call: {str(se)}")
+
     def generate_buy_sell_signals(self, results):
         """Generate buy/sell signals based on technical indicators."""
         try:
@@ -1539,89 +1582,47 @@ class StockAnalyzer:
             self.fetch_financial_news()
             self.fetch_stock_data()
 
-            # Fetch additional data
-            economic_data = self.fetch_economic_indicators()
-            options_data = self.fetch_options_data()
-
             # Analysis
             if self.stock_data is not None and not self.stock_data.empty:
-                # Existing analyses
+                # Perform all analyses
                 results, summary = self.perform_technical_analysis()
                 lstm_predictions, lstm_metrics = self.perform_lstm_analysis()
                 forecast = self.forecast_prices()
                 backtest_results = self.perform_backtest()
 
-                # New market condition analysis
-                market_analysis = self.analyze_market_conditions(economic_data, options_data)
+                # Generate trading signals
+                self.generate_buy_sell_signals(results)
 
-                if forecast is not None:
-                    self.print_forecast_summary(forecast)
-
-                # Add optimization and new strategy testing here
-                # Define parameter ranges for optimization
-                bb_params = {
-                    'bb_window': range(10, 31, 5),  # 10, 15, 20, 25, 30
-                    'bb_std': [1.5, 2.0, 2.5, 3.0],
-                    'rsi_window': range(10, 21, 5),  # 10, 15, 20
-                    'rsi_upper': range(65, 81, 5),  # 65, 70, 75, 80
-                    'rsi_lower': range(20, 36, 5)  # 20, 25, 30, 35
+                # Prepare analysis results for trading bot
+                analysis_results = {
+                    'ticker': self.ticker_symbol,
+                    'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'technical_indicators': {
+                        'rsi': float(results['RSI'].iloc[-1]) if 'RSI' in results else None,
+                        'macd': float(results['MACD'].iloc[-1]) if 'MACD' in results else None,
+                        'bb_upper': float(results['BB_High'].iloc[-1]) if 'BB_High' in results else None,
+                        'bb_lower': float(results['BB_Low'].iloc[-1]) if 'BB_Low' in results else None
+                    },
+                    'lstm_prediction': float(lstm_predictions[-1]) if lstm_predictions is not None else None,
+                    'forecast': float(forecast['yhat'].iloc[-1]) if forecast is not None else None,
+                    'backtest_results': backtest_results
                 }
 
-                # Create strategies directory
-                strategies_dir = os.path.join(self.output_dir, 'strategies')
-                os.makedirs(strategies_dir, exist_ok=True)
+                # Save analysis results
+                analysis_file = os.path.join(self.output_dir, f'{self.ticker_symbol}_analysis.json')
+                with open(analysis_file, 'w') as f:
+                    json.dump(analysis_results, f, indent=4)
 
-                # Optimize and test Bollinger Band strategy
-                logging.info("Starting strategy optimization...")
-                try:
-                    best_params, optimization_results = optimize_strategy(
-                        self,
-                        BollingerBandStrategy,
-                        bb_params
-                    )
+                logging.info(f"Analysis results saved to {analysis_file}")
 
-                    if best_params and optimization_results is not None:
-                        # Save optimization results
-                        opt_results_path = os.path.join(strategies_dir,
-                                                        f'{self.ticker_symbol}_optimization_results.csv')
-                        optimization_results.to_csv(opt_results_path)
-                        logging.info(f"Saved optimization results to {opt_results_path}")
-
-                        # Create and test optimized strategy
-                        OptimizedStrategy = type('OptimizedStrategy',
-                                                 (BollingerBandStrategy,),
-                                                 best_params)
-
-                        bt = Backtest(self.stock_data, OptimizedStrategy,
-                                      cash=10000, commission=.002)
-                        stats = bt.run()
-
-                        # Save optimized strategy results
-                        opt_stats_path = os.path.join(strategies_dir,
-                                                      f'{self.ticker_symbol}_optimized_strategy_stats.json')
-                        with open(opt_stats_path, 'w') as f:
-                            json.dump(stats._asdict(), f, indent=4)
-
-                        # Create and save strategy performance plot
-                        self._create_backtest_plot(bt, stats, strategies_dir)
-                        logging.info("Completed strategy optimization and testing")
-
-                except Exception as e:
-                    logging.error(f"Error in strategy optimization: {str(e)}")
-
-                # Perform original backtesting strategy
-                self.perform_backtest()
-
-                # Print market analysis summary if available
-                if market_analysis:
-                    self._print_market_analysis(market_analysis)
+                # Explicitly call trading bot
+                self.start_trading_bot(analysis_file)
 
             else:
-                print(f"Cannot proceed with analysis for {self.ticker_symbol} due to missing stock data.")
+                logging.warning(f"Cannot proceed with analysis for {self.ticker_symbol} due to missing stock data.")
 
         except Exception as e:
             logging.error(f"Error analyzing stock {self.ticker_symbol}: {str(e)}")
-
     def _print_market_analysis(self, analysis):
         """Print a summary of the market condition analysis"""
         print("\nMarket Analysis Summary:")
@@ -2353,7 +2354,6 @@ def init_worker():
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
 def main():
-    # Set up logging
     setup_logging()
     logging.info("Starting stock analysis script")
 
@@ -2371,31 +2371,20 @@ def main():
         logging.info(f"Using date range: {start_date} to {end_date}")
 
         # Read tickers from file
-        logging.info("Reading tickers from tickers.txt")
         with open('tickers.txt', 'r') as file:
             tickers = [line.strip() for line in file if line.strip()]
-        logging.info(f"Found {len(tickers)} tickers to process")
 
-        # Calculate optimal number of processes
-        num_processes = min(cpu_count(), len(tickers))
-        logging.info(f"Using {num_processes} processes for parallel processing")
+        logging.info(f"Processing {len(tickers)} tickers")
 
-        # Create partial function with fixed start_date and end_date
-        process_ticker_partial = partial(process_ticker, start_date=start_date, end_date=end_date)
+        # Process each ticker
+        for ticker in tickers:
+            analyzer = StockAnalyzer(ticker, start_date, end_date)
+            analyzer.analyze_stock()  # This will now call trading_bot.py after analysis
 
-        # Process tickers in parallel
-        with Pool(processes=num_processes, initializer=init_worker) as pool:
-            results = pool.map(process_ticker_partial, tickers)
-
-        # Log results
-        for result in results:
-            logging.info(result)
-
-        logging.info("Stock analysis script completed")
+        logging.info("All analysis completed")
 
     except Exception as e:
         logging.error(f"Fatal error in main execution: {str(e)}", exc_info=True)
-
 
 if __name__ == "__main__":
     main()
