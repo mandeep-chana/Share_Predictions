@@ -32,6 +32,9 @@ from tensorflow.keras.optimizers import Adam
 import pandas_datareader as pdr
 from fredapi import Fred
 import mibian
+# MultiProcessing
+from multiprocessing import Pool, cpu_count
+from functools import partial
 
 
 def parse_date(date_str):
@@ -548,6 +551,41 @@ class LSTMPredictor:
         # Suppress TensorFlow warnings
         tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
         os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
+    # Add the new methods here, after __init__ and before other existing methods
+    def parallel_prepare_sequences(self, data_chunk, sequence_length):
+        """Prepare sequences for LSTM in parallel"""
+        try:
+            X, y = [], []
+            for i in range(len(data_chunk) - sequence_length):
+                X.append(data_chunk[i:(i + sequence_length)])
+                y.append(data_chunk[i + sequence_length])
+            return np.array(X), np.array(y)
+        except Exception as e:
+            logging.error(f"Error preparing sequences: {str(e)}")
+            return None, None
+
+    def prepare_data_for_lstm(self, data, sequence_length=60):
+        """Parallel implementation of data preparation for LSTM"""
+        try:
+            # Split data into chunks
+            num_chunks = cpu_count()
+            chunk_size = len(data) // num_chunks
+            chunks = [data[i:i + chunk_size + sequence_length] for i in range(0, len(data), chunk_size)]
+
+            # Prepare sequences in parallel
+            with Pool(processes=cpu_count()) as pool:
+                results = pool.map(partial(self.parallel_prepare_sequences, sequence_length=sequence_length), chunks)
+
+            # Combine results
+            X = np.concatenate([r[0] for r in results if r[0] is not None])
+            y = np.concatenate([r[1] for r in results if r[1] is not None])
+
+            return X, y
+
+        except Exception as e:
+            logging.error(f"Error in parallel data preparation: {str(e)}")
+            return None, None
 
     def create_sequences(self, data):
         """Create sequences for LSTM input"""
@@ -2255,52 +2293,68 @@ class StockAnalyzer:
             logging.error(f"Error fetching options data: {str(e)}")
             return None
 
+def process_ticker(ticker, start_date, end_date):
+    """Process a single ticker - to be used with multiprocessing"""
+    logging.info(f"\n{'=' * 50}")
+    logging.info(f"Processing ticker: {ticker}")
 
+    try:
+        analyzer = StockAnalyzer(ticker, start_date, end_date)
+        analyzer.analyze_stock()
+        return f"Successfully processed {ticker}"
+    except Exception as e:
+        logging.error(f"Error processing ticker {ticker}: {str(e)}", exc_info=True)
+        return f"Failed to process {ticker}: {str(e)}"
+
+def init_worker():
+    """Initialize worker process"""
+    import signal
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
 
 def main():
-  # Set up logging
-  setup_logging()
-  logging.info("Starting stock analysis script")
+    # Set up logging
+    setup_logging()
+    logging.info("Starting stock analysis script")
 
-  try:
-      # Get date range from user
-      start_date = get_date_input("Enter start date (YYYY-MM-DD) or press Enter for default: ")
-      end_date = get_date_input("Enter end date (YYYY-MM-DD) or press Enter for default: ")
+    try:
+        # Get date range from user
+        start_date = get_date_input("Enter start date (YYYY-MM-DD) or press Enter for default: ")
+        end_date = get_date_input("Enter end date (YYYY-MM-DD) or press Enter for default: ")
 
-      # Set default dates if None
-      if start_date is None:
-          start_date = datetime.now() - timedelta(days=730)  # Default to 2 years ago
-      if end_date is None:
-          end_date = datetime.now()  # Default to today
+        # Set default dates if None
+        if start_date is None:
+            start_date = datetime.now() - timedelta(days=730)
+        if end_date is None:
+            end_date = datetime.now()
 
-      logging.info(f"Using date range: {start_date} to {end_date}")
+        logging.info(f"Using date range: {start_date} to {end_date}")
 
-      # Read tickers from file
-      logging.info("Reading tickers from tickers.txt")
-      with open('tickers.txt', 'r') as file:
-          tickers = [line.strip() for line in file if line.strip()]
-      logging.info(f"Found {len(tickers)} tickers to process")
+        # Read tickers from file
+        logging.info("Reading tickers from tickers.txt")
+        with open('tickers.txt', 'r') as file:
+            tickers = [line.strip() for line in file if line.strip()]
+        logging.info(f"Found {len(tickers)} tickers to process")
 
-      # Process each ticker
-      for ticker in tickers:
-          logging.info(f"\n{'=' * 50}")
-          logging.info(f"Processing ticker: {ticker}")
+        # Calculate optimal number of processes
+        num_processes = min(cpu_count(), len(tickers))
+        logging.info(f"Using {num_processes} processes for parallel processing")
 
-          try:
-              analyzer = StockAnalyzer(ticker, start_date, end_date)
-              analyzer.analyze_stock()
+        # Create partial function with fixed start_date and end_date
+        process_ticker_partial = partial(process_ticker, start_date=start_date, end_date=end_date)
 
-              # Launch the real-time plot for the ticker
-              os.system(f"bokeh serve --show real_time_plot.py --args {ticker}")
+        # Process tickers in parallel
+        with Pool(processes=num_processes, initializer=init_worker) as pool:
+            results = pool.map(process_ticker_partial, tickers)
 
-          except Exception as e:
-              logging.error(f"Error processing ticker {ticker}: {str(e)}", exc_info=True)
-              continue
+        # Log results
+        for result in results:
+            logging.info(result)
 
-      logging.info("Stock analysis script completed")
+        logging.info("Stock analysis script completed")
 
-  except Exception as e:
-      logging.error(f"Fatal error in main execution: {str(e)}", exc_info=True)
+    except Exception as e:
+        logging.error(f"Fatal error in main execution: {str(e)}", exc_info=True)
+
 
 if __name__ == "__main__":
-  main()
+    main()
