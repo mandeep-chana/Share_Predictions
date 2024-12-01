@@ -41,23 +41,46 @@ def place_order(ticker, qty, side, order_type='market', time_in_force='gtc'):
     except Exception as e:
         logging.error(f"Error placing order for {ticker}: {e}")
 
-def main():
-    """Main function to read tickers, fetch prices, and place orders based on trading logic."""
-    tickers = read_tickers('tickers.txt')
-    logging.info(f"Tickers to process: {tickers}")
+def process_trading_signals(signals):
+    """Process trading signals from Share_Price_V1.py"""
+    try:
+        ticker = signals['ticker']
+        technical_indicators = signals['technical_indicators']
+        lstm_prediction = signals['lstm_prediction']
+        market_analysis = signals['market_analysis']
 
-    for ticker in tickers:
+        # Combine with your existing trading logic
         last_price = get_last_price(ticker)
         if last_price is not None:
-            logging.info(f"Last price of {ticker}: {last_price}")
-            # Example trading logic: Buy 1 share if the price is below $100
-            if last_price < 100:
+            if technical_indicators['rsi'] < 30 and lstm_prediction > last_price:
                 place_order(ticker, 1, 'buy')
-            # Example trading logic: Sell 1 share if the price is above $200
-            elif last_price > 200:
+            elif technical_indicators['rsi'] > 70 and lstm_prediction < last_price:
                 place_order(ticker, 1, 'sell')
-        else:
-            logging.warning(f"No price data for {ticker}")
+
+    except Exception as e:
+        logging.error(f"Error processing trading signals: {e}")
+
+def main(signals_file=None):
+    """Main function to read tickers and process signals."""
+    try:
+        if signals_file and os.path.exists(signals_file):
+            with open(signals_file, 'r') as f:
+                signals = json.load(f)
+            process_trading_signals(signals)
+
+        # Your existing main() logic here
+        tickers = read_tickers('tickers.txt')
+        for ticker in tickers:
+            last_price = get_last_price(ticker)
+            if last_price is not None:
+                # Your existing trading logic
+                if last_price < 100:
+                    place_order(ticker, 1, 'buy')
+                elif last_price > 200:
+                    place_order(ticker, 1, 'sell')
+
+    except Exception as e:
+        logging.error(f"Error in main function: {e}")
 
 if __name__ == "__main__":
     while True:

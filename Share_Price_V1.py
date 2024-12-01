@@ -1103,23 +1103,33 @@ class StockAnalyzer:
         try:
             print(f"\nStarting analysis for {self.ticker_symbol}...")
 
-            # Data Collection
+            # Existing analysis code...
             self.fetch_company_info()
             self.fetch_financial_news()
             self.fetch_stock_data()
 
-            # Perform technical analysis
             if self.stock_data is not None and not self.stock_data.empty:
                 results, summary = self.perform_technical_analysis()
-                logging.info(f"Technical analysis summary for {self.ticker_symbol}: {summary}")
+                lstm_predictions, lstm_metrics = self.perform_lstm_analysis()
+                forecast = self.forecast_prices()
+                backtest_results = self.perform_backtest()
 
+                # Store LSTM predictions for trading bot
+                self.lstm_predictions = lstm_predictions
+
+                # Store market analysis results
+                economic_data = self.fetch_economic_indicators()
+                options_data = self.fetch_options_data()
+                self.market_analysis = self.analyze_market_conditions(economic_data, options_data)
+
+                # Generate trading signals
                 self.generate_buy_sell_signals(results)
 
-
+                # Trigger trading bot with analysis results
+                self.trigger_trading_bot()
 
         except Exception as e:
             logging.error(f"Error analyzing stock {self.ticker_symbol}: {str(e)}")
-
     def generate_buy_sell_signals(self, results):
         """Generate buy/sell signals based on technical indicators."""
         try:
@@ -2292,6 +2302,37 @@ class StockAnalyzer:
         except Exception as e:
             logging.error(f"Error fetching options data: {str(e)}")
             return None
+
+    def trigger_trading_bot(self):
+        """Trigger trading bot with analysis results"""
+        try:
+            # Save trading signals and analysis results
+            trading_signals = {
+                'ticker': self.ticker_symbol,
+                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'technical_indicators': {
+                    'rsi': self.stock_data['RSI'].iloc[-1] if 'RSI' in self.stock_data else None,
+                    'macd': self.stock_data['MACD'].iloc[-1] if 'MACD' in self.stock_data else None,
+                    'bb_upper': self.stock_data['BB_High'].iloc[-1] if 'BB_High' in self.stock_data else None,
+                    'bb_lower': self.stock_data['BB_Low'].iloc[-1] if 'BB_Low' in self.stock_data else None
+                },
+                'lstm_prediction': self.lstm_predictions[-1] if hasattr(self, 'lstm_predictions') else None,
+                'market_analysis': self.market_analysis if hasattr(self, 'market_analysis') else None
+            }
+
+            # Save signals to a file that trading_bot.py can read
+            signals_file = os.path.join(self.output_dir, 'trading_signals.json')
+            with open(signals_file, 'w') as f:
+                json.dump(trading_signals, f, indent=4)
+
+            # Import and call trading_bot
+            import trading_bot
+            trading_bot.main(signals_file)
+
+            logging.info(f"Successfully triggered trading bot for {self.ticker_symbol}")
+
+        except Exception as e:
+            logging.error(f"Error triggering trading bot: {str(e)}")
 
 def process_ticker(ticker, start_date, end_date):
     """Process a single ticker - to be used with multiprocessing"""
