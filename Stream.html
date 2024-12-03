@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-time Candlestick Chart</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+            background-color: #1a1a1a;
+            color: #ffffff;
+        }
+        #chart {
+            width: 100%;
+            height: 80vh;
+            background-color: #2d2d2d;
+            border-radius: 8px;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        .status {
+            padding: 5px 10px;
+            border-radius: 4px;
+            background-color: #4CAF50;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Real-time Candlestick Chart</h1>
+        <div class="status" id="status">Connected</div>
+    </div>
+    <div id="chart"></div>
+
+    <script>
+        let candlestickData = {
+            x: [],
+            open: [],
+            high: [],
+            low: [],
+            close: [],
+            type: 'candlestick',
+            name: 'AAPL'
+        };
+
+        const layout = {
+            title: 'AAPL Real-time Candlestick Chart',
+            yaxis: {title: 'Price'},
+            xaxis: {title: 'Time'},
+            plot_bgcolor: '#2d2d2d',
+            paper_bgcolor: '#2d2d2d',
+            font: {color: '#ffffff'},
+            dragmode: 'zoom',
+            showlegend: false
+        };
+
+</html>

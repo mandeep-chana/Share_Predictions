@@ -47,6 +47,7 @@ def parse_date(date_str):
 def get_date_input(prompt):
     while True:
         date_str = input(prompt).strip()
+
         if not date_str:  # If the user presses Enter
             return None
         try:
