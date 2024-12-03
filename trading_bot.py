@@ -20,30 +20,136 @@ class AlpacaStreamHandler:
         self.secret_key = secret_key
         self.logger = logger
         self.ws_url = ALPACA_CONFIG['WS_URL']
+        self.trade_ws_url = ALPACA_CONFIG['TRADE_WS_URL']
         self.websocket = None
         self.running = False
         self.candlestick_data = []
         self.current_candle = None
         self.last_candle_time = None
         self.candle_interval = 60
-        self.html_template = self.load_html_template()
+        self.html_template = '''<!DOCTYPE html>
+    <html>
+    <head>
+        <title>Real-time Candlestick Chart</title>
+        <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+        <style>
+            body { background-color: #1a1a1a; color: white; }
+            #chart { width: 100%; height: 800px; }
+        </style>
+    </head>
+    <body>
+        <div id="chart"></div>
+        <script>
+            let candleData = {
+                timestamp: [],
+                open: [],
+                high: [],
+                low: [],
+                close: [],
+                volume: []
+            };
+
+            function updateChart() {
+                const trace = {
+                    x: candleData.timestamp,
+                    open: candleData.open,
+                    high: candleData.high,
+                    low: candleData.low,
+                    close: candleData.close,
+                    type: 'candlestick',
+                    xaxis: 'x',
+                    yaxis: 'y'
+                };
+
+                const layout = {
+                    title: 'Real-time Candlestick Chart',
+                    yaxis: {title: 'Price'},
+                    xaxis: {title: 'Time'},
+                    paper_bgcolor: '#1a1a1a',
+                    plot_bgcolor: '#1a1a1a',
+                    font: { color: '#ffffff' }
+                };
+
+                Plotly.newPlot('chart', [trace], layout);
+            }
+
+            // Initialize empty chart
+            updateChart();
+
+            // WebSocket connection
+            const ws = new WebSocket('wss://stream.data.alpaca.markets/v2/iex');
+
+            ws.onopen = () => {
+                console.log('Connected to Alpaca WebSocket');
+                ws.send(JSON.stringify({
+                    "action": "auth",
+                    "key": "''' + self.api_key + '''",
+                    "secret": "''' + self.secret_key + '''"
+                }));
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+
+                if (data.stream === 'authorization' && data.data.status === 'authorized') {
+                    console.log('Authenticated, subscribing to trades');
+                    ws.send(JSON.stringify({
+                        "action": "subscribe",
+                        "trades": ["AAPL"],
+                        "quotes": ["AAPL"],
+                        "bars": ["AAPL"]
+                    }));
+                }
+
+                if (data.stream === 'trade') {
+                    const trade = data.data;
+                    // Update candlestick data
+                    const timestamp = new Date(trade.t);
+                    candleData.timestamp.push(timestamp);
+                    candleData.open.push(trade.p);
+                    candleData.high.push(trade.p);
+                    candleData.low.push(trade.p);
+                    candleData.close.push(trade.p);
+                    candleData.volume.push(trade.s);
+
+                    // Update chart
+                    updateChart();
+                }
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+            };
+
+            ws.onclose = () => {
+                console.log('WebSocket connection closed');
+            };
+        </script>
+    </body>
+    </html>'''
 
     def load_html_template(self):
         try:
-            with open('Stream.html', 'r') as file:
-                template = file.read()
-                template = template.replace('YOUR_API_KEY', self.api_key)
-                template = template.replace('YOUR_SECRET_KEY', self.secret_key)
-                return template
+            template = self.html_template.replace('YOUR_API_KEY', self.api_key).replace('YOUR_SECRET_KEY',
+                                                                                        self.secret_key)
+            with open('Stream.html', 'w') as file:
+                file.write(template)
+            return template
         except Exception as e:
-            self.logger.error(f"Error loading HTML template: {str(e)}")
+            self.logger.error(f"Error creating HTML template: {str(e)}")
             return None
 
     async def connect(self):
         try:
             self.websocket = await websockets.connect(self.ws_url)
-            self.logger.info("WebSocket connection established")
+            self.logger.info("Market data WebSocket connection established")
 
+            # First connection response
+            initial_response = await self.websocket.recv()
+            initial_data = json.loads(initial_response)
+            self.logger.info(f"Initial connection response: {initial_data}")
+
+            # Send authentication message
             auth_message = {
                 "action": "auth",
                 "key": self.api_key,
@@ -51,10 +157,19 @@ class AlpacaStreamHandler:
             }
             await self.websocket.send(json.dumps(auth_message))
 
-            response = await self.websocket.recv()
-            auth_response = json.loads(response)
+            # Get authentication response
+            auth_response = await self.websocket.recv()
+            auth_data = json.loads(auth_response)
+            self.logger.info(f"Authentication response: {auth_data}")
 
-            if auth_response[0]["msg"] == "authenticated":
+            # Check for successful authentication
+            # Alpaca v2 WebSocket returns an array with authentication status
+            if isinstance(auth_data, list) and auth_data[0].get('T') == 'success':
+                self.logger.info("WebSocket authentication successful")
+                return True
+            elif isinstance(auth_data, dict) and auth_data.get('stream') == 'authorization' and auth_data.get('data',
+                                                                                                              {}).get(
+                    'status') == 'authorized':
                 self.logger.info("WebSocket authentication successful")
                 return True
             else:
@@ -67,18 +182,34 @@ class AlpacaStreamHandler:
 
     async def subscribe_to_market_data(self, symbols):
         try:
+            symbols = [symbol.upper() for symbol in symbols]
+
+            # Updated subscription message for v2 API
             subscribe_message = {
                 "action": "subscribe",
                 "trades": symbols,
                 "quotes": symbols,
                 "bars": symbols
             }
+
             await self.websocket.send(json.dumps(subscribe_message))
+
+            # Get subscription confirmation
             response = await self.websocket.recv()
-            self.logger.info(f"Subscription response: {response}")
+            subscription_data = json.loads(response)
+            self.logger.info(f"Subscription response: {subscription_data}")
+
+            # Check for successful subscription (v2 API format)
+            if isinstance(subscription_data, list) and subscription_data[0].get('T') == 'subscription':
+                self.logger.info(f"Successfully subscribed to data for symbols: {symbols}")
+                return True
+            else:
+                self.logger.warning(f"Unexpected subscription response: {subscription_data}")
+                return False
 
         except Exception as e:
-            self.logger.error(f"Subscription error: {str(e)}")
+            self.logger.error(f"Subscription error: {str(e)}", exc_info=True)
+            return False
 
     def update_candlestick(self, trade_data):
         current_time = datetime.now()
@@ -105,18 +236,49 @@ class AlpacaStreamHandler:
     async def handle_message(self, message):
         try:
             data = json.loads(message)
+            self.logger.debug(f"Received message: {data}")
 
-            if data[0]['T'] == 'trade':
-                trade_data = {
-                    'price': float(data[0]['p']),
-                    'size': float(data[0]['s']),
-                    'timestamp': datetime.fromtimestamp(data[0]['t'] / 1e9)
-                }
-                self.update_candlestick(trade_data)
-                await self.update_chart()
+            if isinstance(data, dict):
+                stream = data.get('stream')
+
+                if stream == 'trade':
+                    trade_data = data.get('data', {})
+                    processed_trade = {
+                        'price': float(trade_data.get('p', 0)),
+                        'size': float(trade_data.get('s', 0)),
+                        'timestamp': datetime.fromtimestamp(trade_data.get('t', 0) / 1e9)
+                    }
+                    self.update_candlestick(processed_trade)
+                    await self.update_chart()
+
+                elif stream == 'error':
+                    self.logger.error(f"Stream error: {data}")
+
+                elif stream == 'listening':
+                    self.logger.info(f"Listening confirmation: {data}")
 
         except Exception as e:
-            self.logger.error(f"Error processing message: {str(e)}")
+            self.logger.error(f"Error processing message: {str(e)}", exc_info=True)
+
+    async def reconnect(self):
+        """Reconnect to the WebSocket server"""
+        self.logger.info("Attempting to reconnect...")
+        retry_count = 0
+        max_retries = 5
+
+        while retry_count < max_retries:
+            try:
+                if await self.connect():
+                    await self.subscribe_to_market_data(['AAPL'])  # Re-subscribe to data
+                    self.logger.info("Successfully reconnected")
+                    return True
+                retry_count += 1
+                await asyncio.sleep(5 * retry_count)  # Exponential backoff
+            except Exception as e:
+                self.logger.error(f"Reconnection attempt {retry_count + 1} failed: {str(e)}")
+
+        self.logger.error("Failed to reconnect after maximum retries")
+        return False
 
     async def update_chart(self):
         try:
@@ -158,18 +320,21 @@ class AlpacaStreamHandler:
                 await self.handle_message(message)
             except websockets.exceptions.ConnectionClosed:
                 self.logger.error("WebSocket connection closed")
-                await self.reconnect()
+                if await self.reconnect():
+                    continue
+                else:
+                    break
             except Exception as e:
                 self.logger.error(f"Stream listener error: {str(e)}")
                 await asyncio.sleep(5)
 
     async def start(self, symbols=['AAPL']):
-        if await self.connect():
-            if self.html_template:
-                with open('real_time_chart.html', 'w') as f:
-                    f.write(self.html_template)
-                webbrowser.open('real_time_chart.html')
+        # Load and open HTML template first
+        if self.load_html_template():
+            webbrowser.open('file://' + os.path.abspath('Stream.html'))
 
+        # Then connect to WebSocket
+        if await self.connect():
             await self.subscribe_to_market_data(symbols)
             await self.stream_listener()
 
@@ -223,10 +388,10 @@ def get_position(api, ticker, api_logger):
         api_logger.info(f"Current position for {ticker}: {position.qty} shares at avg entry ${position.avg_entry_price}")
         return position
     except APIError as e:
-        if "position does not exist" in str(e):
+        if "position does not exist" in str(e) or "404" in str(e):
             api_logger.info(f"No current position exists for {ticker}")
-        else:
-            api_logger.error(f"API Error getting position for {ticker}: {str(e)}", exc_info=True)
+            return None
+        api_logger.error(f"API Error getting position for {ticker}: {str(e)}", exc_info=True)
         return None
     except Exception as e:
         api_logger.error(f"Unexpected error getting position for {ticker}: {str(e)}", exc_info=True)
@@ -315,12 +480,6 @@ async def main_async(analysis_file=None):
     logger.info("Starting trading bot execution")
 
     try:
-        api = tradeapi.REST(
-            key_id=ALPACA_CONFIG['API_KEY'],
-            secret_key=ALPACA_CONFIG['SECRET_KEY'],
-            base_url=ALPACA_CONFIG['BASE_URL']
-        )
-
         stream_handler = AlpacaStreamHandler(
             ALPACA_CONFIG['API_KEY'],
             ALPACA_CONFIG['SECRET_KEY'],
@@ -328,16 +487,11 @@ async def main_async(analysis_file=None):
             logger
         )
 
-        if analysis_file:
-            logger.info(f"Loading analysis results from {analysis_file}")
-            try:
-                with open(analysis_file, 'r') as f:
-                    analysis_results = json.load(f)
-                logger.info(f"Successfully loaded analysis results for {analysis_results['ticker']}")
-                process_analysis_results(api, analysis_results, logger, api_logger)
-            except Exception as e:
-                logger.error(f"Error reading analysis file: {str(e)}", exc_info=True)
+        # Create and open the chart first
+        if stream_handler.load_html_template():
+            webbrowser.open('Stream.html')
 
+        # Then start the WebSocket connection
         await stream_handler.start(['AAPL'])
 
     except Exception as e:

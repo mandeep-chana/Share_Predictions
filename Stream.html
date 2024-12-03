@@ -1,66 +1,100 @@
 <!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Real-time Candlestick Chart</title>
-    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
-    <style>
-        body {
-            margin: 0;
-            padding: 20px;
-            font-family: Arial, sans-serif;
-            background-color: #1a1a1a;
-            color: #ffffff;
-        }
-        #chart {
-            width: 100%;
-            height: 80vh;
-            background-color: #2d2d2d;
-            border-radius: 8px;
-            padding: 20px;
-            box-sizing: border-box;
-        }
-        .header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 20px;
-        }
-        .status {
-            padding: 5px 10px;
-            border-radius: 4px;
-            background-color: #4CAF50;
-        }
-    </style>
-</head>
-<body>
-    <div class="header">
-        <h1>Real-time Candlestick Chart</h1>
-        <div class="status" id="status">Connected</div>
-    </div>
-    <div id="chart"></div>
+    <html>
+    <head>
+        <title>Real-time Candlestick Chart</title>
+        <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+        <style>
+            body { background-color: #1a1a1a; color: white; }
+            #chart { width: 100%; height: 800px; }
+        </style>
+    </head>
+    <body>
+        <div id="chart"></div>
+        <script>
+            let candleData = {
+                timestamp: [],
+                open: [],
+                high: [],
+                low: [],
+                close: [],
+                volume: []
+            };
 
-    <script>
-        let candlestickData = {
-            x: [],
-            open: [],
-            high: [],
-            low: [],
-            close: [],
-            type: 'candlestick',
-            name: 'AAPL'
-        };
+            function updateChart() {
+                const trace = {
+                    x: candleData.timestamp,
+                    open: candleData.open,
+                    high: candleData.high,
+                    low: candleData.low,
+                    close: candleData.close,
+                    type: 'candlestick',
+                    xaxis: 'x',
+                    yaxis: 'y'
+                };
 
-        const layout = {
-            title: 'AAPL Real-time Candlestick Chart',
-            yaxis: {title: 'Price'},
-            xaxis: {title: 'Time'},
-            plot_bgcolor: '#2d2d2d',
-            paper_bgcolor: '#2d2d2d',
-            font: {color: '#ffffff'},
-            dragmode: 'zoom',
-            showlegend: false
-        };
+                const layout = {
+                    title: 'Real-time Candlestick Chart',
+                    yaxis: {title: 'Price'},
+                    xaxis: {title: 'Time'},
+                    paper_bgcolor: '#1a1a1a',
+                    plot_bgcolor: '#1a1a1a',
+                    font: { color: '#ffffff' }
+                };
 
-</html>
+                Plotly.newPlot('chart', [trace], layout);
+            }
+
+            // Initialize empty chart
+            updateChart();
+
+            // WebSocket connection
+            const ws = new WebSocket('wss://stream.data.alpaca.markets/v2/iex');
+
+            ws.onopen = () => {
+                console.log('Connected to Alpaca WebSocket');
+                ws.send(JSON.stringify({
+                    "action": "auth",
+                    "key": "PK696JHYAIWX1079IHTX",
+                    "secret": "5wdfJ9fMEsaZWJ1UifMpsbWSe3OqEiA6i4ab4SOH"
+                }));
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+
+                if (data.stream === 'authorization' && data.data.status === 'authorized') {
+                    console.log('Authenticated, subscribing to trades');
+                    ws.send(JSON.stringify({
+                        "action": "subscribe",
+                        "trades": ["AAPL"],
+                        "quotes": ["AAPL"],
+                        "bars": ["AAPL"]
+                    }));
+                }
+
+                if (data.stream === 'trade') {
+                    const trade = data.data;
+                    // Update candlestick data
+                    const timestamp = new Date(trade.t);
+                    candleData.timestamp.push(timestamp);
+                    candleData.open.push(trade.p);
+                    candleData.high.push(trade.p);
+                    candleData.low.push(trade.p);
+                    candleData.close.push(trade.p);
+                    candleData.volume.push(trade.s);
+
+                    // Update chart
+                    updateChart();
+                }
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+            };
+
+            ws.onclose = () => {
+                console.log('WebSocket connection closed');
+            };
+        </script>
+    </body>
+    </html>
