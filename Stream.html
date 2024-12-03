@@ -1,100 +1,114 @@
 <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Real-time Candlestick Chart</title>
-        <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
-        <style>
-            body { background-color: #1a1a1a; color: white; }
-            #chart { width: 100%; height: 800px; }
-        </style>
-    </head>
-    <body>
-        <div id="chart"></div>
-        <script>
-            let candleData = {
-                timestamp: [],
-                open: [],
-                high: [],
-                low: [],
-                close: [],
-                volume: []
-            };
+        <html>
+        <head>
+            <title>Real-time Candlestick Chart</title>
+            <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+            <style>
+                body { background-color: #1a1a1a; color: white; }
+                #chart { width: 100%; height: 800px; }
+                #ticker-info {
+                    font-size: 24px;
+                    font-weight: bold;
+                    margin: 10px 0;
+                    padding: 10px;
+                    background-color: #2a2a2a;
+                    border-radius: 5px;
+                    display: inline-block;
+                }
+            </style>
+        </head>
+        <body>
+            <div id="ticker-info">Ticker: <span id="ticker-symbol">Loading...</span></div>
+            <div id="chart"></div>
+            <script>
+                const urlParams = new URLSearchParams(window.location.search);
+                const ticker = urlParams.get('symbol') || 'AAPL';
+                document.getElementById('ticker-symbol').textContent = ticker;
 
-            function updateChart() {
-                const trace = {
-                    x: candleData.timestamp,
-                    open: candleData.open,
-                    high: candleData.high,
-                    low: candleData.low,
-                    close: candleData.close,
-                    type: 'candlestick',
-                    xaxis: 'x',
-                    yaxis: 'y'
+                let candleData = {
+                    timestamp: [],
+                    open: [],
+                    high: [],
+                    low: [],
+                    close: [],
+                    volume: []
                 };
 
-                const layout = {
-                    title: 'Real-time Candlestick Chart',
-                    yaxis: {title: 'Price'},
-                    xaxis: {title: 'Time'},
-                    paper_bgcolor: '#1a1a1a',
-                    plot_bgcolor: '#1a1a1a',
-                    font: { color: '#ffffff' }
-                };
+                function updateChart() {
+                    const trace = {
+                        x: candleData.timestamp,
+                        open: candleData.open,
+                        high: candleData.high,
+                        low: candleData.low,
+                        close: candleData.close,
+                        type: 'candlestick',
+                        xaxis: 'x',
+                        yaxis: 'y'
+                    };
 
-                Plotly.newPlot('chart', [trace], layout);
-            }
+                    const layout = {
+                        title: `${ticker} Real-time Candlestick Chart`,
+                        yaxis: {title: 'Price'},
+                        xaxis: {title: 'Time'},
+                        paper_bgcolor: '#1a1a1a',
+                        plot_bgcolor: '#1a1a1a',
+                        font: { color: '#ffffff' }
+                    };
 
-            // Initialize empty chart
-            updateChart();
+                    Plotly.newPlot('chart', [trace], layout);
+                }
 
-            // WebSocket connection
-            const ws = new WebSocket('wss://stream.data.alpaca.markets/v2/iex');
+                // Initialize empty chart
+                updateChart();
 
-            ws.onopen = () => {
-                console.log('Connected to Alpaca WebSocket');
-                ws.send(JSON.stringify({
-                    "action": "auth",
-                    "key": "PK696JHYAIWX1079IHTX",
-                    "secret": "5wdfJ9fMEsaZWJ1UifMpsbWSe3OqEiA6i4ab4SOH"
-                }));
-            };
+                // WebSocket connection
+                const ws = new WebSocket('wss://stream.data.alpaca.markets/v2/iex');
 
-            ws.onmessage = (event) => {
-                const data = JSON.parse(event.data);
-
-                if (data.stream === 'authorization' && data.data.status === 'authorized') {
-                    console.log('Authenticated, subscribing to trades');
+                ws.onopen = () => {
+                    console.log('Connected to Alpaca WebSocket');
                     ws.send(JSON.stringify({
-                        "action": "subscribe",
-                        "trades": ["AAPL"],
-                        "quotes": ["AAPL"],
-                        "bars": ["AAPL"]
+                        "action": "auth",
+                        "key": "PK696JHYAIWX1079IHTX",
+                        "secret": "5wdfJ9fMEsaZWJ1UifMpsbWSe3OqEiA6i4ab4SOH"
                     }));
-                }
+                };
 
-                if (data.stream === 'trade') {
-                    const trade = data.data;
-                    // Update candlestick data
-                    const timestamp = new Date(trade.t);
-                    candleData.timestamp.push(timestamp);
-                    candleData.open.push(trade.p);
-                    candleData.high.push(trade.p);
-                    candleData.low.push(trade.p);
-                    candleData.close.push(trade.p);
-                    candleData.volume.push(trade.s);
+                ws.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
 
-                    // Update chart
-                    updateChart();
-                }
-            };
+                    if (data.stream === 'authorization' && data.data.status === 'authorized') {
+                        console.log('Authenticated, subscribing to trades');
+                        ws.send(JSON.stringify({
+                            "action": "subscribe",
+                            "trades": [ticker],
+                            "quotes": [ticker],
+                            "bars": [ticker]
+                        }));
+                    }
 
-            ws.onerror = (error) => {
-                console.error('WebSocket error:', error);
-            };
+                    if (data.stream === 'trade') {
+                        const trade = data.data;
+                        // Update candlestick data
+                        const timestamp = new Date(trade.t);
+                        candleData.timestamp.push(timestamp);
+                        candleData.open.push(trade.p);
+                        candleData.high.push(trade.p);
+                        candleData.low.push(trade.p);
+                        candleData.close.push(trade.p);
+                        candleData.volume.push(trade.s);
 
-            ws.onclose = () => {
-                console.log('WebSocket connection closed');
-            };
-        </script>
-    </body>
-    </html>
+                        // Update chart
+                        updateChart();
+                    }
+                };
+
+                ws.onerror = (error) => {
+                    console.error('WebSocket error:', error);
+                };
+
+                ws.onclose = () => {
+                    console.log('WebSocket connection closed');
+                };
+            </script>
+        </body>
+        </html>

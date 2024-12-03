@@ -23,121 +23,163 @@ class AlpacaStreamHandler:
         self.trade_ws_url = ALPACA_CONFIG['TRADE_WS_URL']
         self.websocket = None
         self.running = False
+        self.clients = set()  # Add this for WebSocket server
         self.candlestick_data = []
         self.current_candle = None
         self.last_candle_time = None
         self.candle_interval = 60
         self.html_template = '''<!DOCTYPE html>
-    <html>
-    <head>
-        <title>Real-time Candlestick Chart</title>
-        <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
-        <style>
-            body { background-color: #1a1a1a; color: white; }
-            #chart { width: 100%; height: 800px; }
-        </style>
-    </head>
-    <body>
-        <div id="chart"></div>
-        <script>
-            let candleData = {
-                timestamp: [],
-                open: [],
-                high: [],
-                low: [],
-                close: [],
-                volume: []
-            };
+        <html>
+        <head>
+            <title>Real-time Candlestick Chart</title>
+            <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+            <style>
+                body { background-color: #1a1a1a; color: white; }
+                #chart { width: 100%; height: 800px; }
+                #ticker-info {
+                    font-size: 24px;
+                    font-weight: bold;
+                    margin: 10px 0;
+                    padding: 10px;
+                    background-color: #2a2a2a;
+                    border-radius: 5px;
+                    display: inline-block;
+                }
+            </style>
+        </head>
+        <body>
+            <div id="ticker-info">Ticker: <span id="ticker-symbol">Loading...</span></div>
+            <div id="chart"></div>
+            <script>
+                const urlParams = new URLSearchParams(window.location.search);
+                const ticker = urlParams.get('symbol') || 'AAPL';
+                document.getElementById('ticker-symbol').textContent = ticker;
 
-            function updateChart() {
-                const trace = {
-                    x: candleData.timestamp,
-                    open: candleData.open,
-                    high: candleData.high,
-                    low: candleData.low,
-                    close: candleData.close,
-                    type: 'candlestick',
-                    xaxis: 'x',
-                    yaxis: 'y'
+                let candleData = {
+                    timestamp: [],
+                    open: [],
+                    high: [],
+                    low: [],
+                    close: [],
+                    volume: []
                 };
 
-                const layout = {
-                    title: 'Real-time Candlestick Chart',
-                    yaxis: {title: 'Price'},
-                    xaxis: {title: 'Time'},
-                    paper_bgcolor: '#1a1a1a',
-                    plot_bgcolor: '#1a1a1a',
-                    font: { color: '#ffffff' }
-                };
+                function updateChart() {
+                    const trace = {
+                        x: candleData.timestamp,
+                        open: candleData.open,
+                        high: candleData.high,
+                        low: candleData.low,
+                        close: candleData.close,
+                        type: 'candlestick',
+                        xaxis: 'x',
+                        yaxis: 'y'
+                    };
 
-                Plotly.newPlot('chart', [trace], layout);
-            }
+                    const layout = {
+                        title: `${ticker} Real-time Candlestick Chart`,
+                        yaxis: {title: 'Price'},
+                        xaxis: {title: 'Time'},
+                        paper_bgcolor: '#1a1a1a',
+                        plot_bgcolor: '#1a1a1a',
+                        font: { color: '#ffffff' }
+                    };
 
-            // Initialize empty chart
-            updateChart();
+                    Plotly.newPlot('chart', [trace], layout);
+                }
 
-            // WebSocket connection
-            const ws = new WebSocket('wss://stream.data.alpaca.markets/v2/iex');
+                // Initialize empty chart
+                updateChart();
 
-            ws.onopen = () => {
-                console.log('Connected to Alpaca WebSocket');
-                ws.send(JSON.stringify({
-                    "action": "auth",
-                    "key": "''' + self.api_key + '''",
-                    "secret": "''' + self.secret_key + '''"
-                }));
-            };
+                // WebSocket connection
+                const ws = new WebSocket('wss://stream.data.alpaca.markets/v2/iex');
 
-            ws.onmessage = (event) => {
-                const data = JSON.parse(event.data);
-
-                if (data.stream === 'authorization' && data.data.status === 'authorized') {
-                    console.log('Authenticated, subscribing to trades');
+                ws.onopen = () => {
+                    console.log('Connected to Alpaca WebSocket');
                     ws.send(JSON.stringify({
-                        "action": "subscribe",
-                        "trades": ["AAPL"],
-                        "quotes": ["AAPL"],
-                        "bars": ["AAPL"]
+                        "action": "auth",
+                        "key": "''' + self.api_key + '''",
+                        "secret": "''' + self.secret_key + '''"
                     }));
-                }
+                };
 
-                if (data.stream === 'trade') {
-                    const trade = data.data;
-                    // Update candlestick data
-                    const timestamp = new Date(trade.t);
-                    candleData.timestamp.push(timestamp);
-                    candleData.open.push(trade.p);
-                    candleData.high.push(trade.p);
-                    candleData.low.push(trade.p);
-                    candleData.close.push(trade.p);
-                    candleData.volume.push(trade.s);
+                ws.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
 
-                    // Update chart
-                    updateChart();
-                }
-            };
+                    if (data.stream === 'authorization' && data.data.status === 'authorized') {
+                        console.log('Authenticated, subscribing to trades');
+                        ws.send(JSON.stringify({
+                            "action": "subscribe",
+                            "trades": [ticker],
+                            "quotes": [ticker],
+                            "bars": [ticker]
+                        }));
+                    }
 
-            ws.onerror = (error) => {
-                console.error('WebSocket error:', error);
-            };
+                    if (data.stream === 'trade') {
+                        const trade = data.data;
+                        // Update candlestick data
+                        const timestamp = new Date(trade.t);
+                        candleData.timestamp.push(timestamp);
+                        candleData.open.push(trade.p);
+                        candleData.high.push(trade.p);
+                        candleData.low.push(trade.p);
+                        candleData.close.push(trade.p);
+                        candleData.volume.push(trade.s);
 
-            ws.onclose = () => {
-                console.log('WebSocket connection closed');
-            };
-        </script>
-    </body>
-    </html>'''
+                        // Update chart
+                        updateChart();
+                    }
+                };
+
+                ws.onerror = (error) => {
+                    console.error('WebSocket error:', error);
+                };
+
+                ws.onclose = () => {
+                    console.log('WebSocket connection closed');
+                };
+            </script>
+        </body>
+        </html>'''
+
+    async def start_server(self):
+        """Start the local WebSocket server."""
+        try:
+            server = await websockets.serve(
+                self.websocket_server,
+                "localhost",
+                8765
+            )
+            self.logger.info("Local WebSocket server started on ws://localhost:8765")
+            return server
+        except Exception as e:
+            self.logger.error(f"Error starting WebSocket server: {str(e)}")
+            raise
+
+    async def websocket_server(self, websocket, path):
+        """Handle web client connections."""
+        self.clients.add(websocket)
+        try:
+            await websocket.wait_closed()
+        finally:
+            self.clients.remove(websocket)
+
+    async def broadcast(self, message):
+        """Broadcast message to all connected web clients."""
+        if self.clients:
+            await asyncio.gather(
+                *[client.send(json.dumps(message)) for client in self.clients]
+            )
 
     def load_html_template(self):
         try:
-            template = self.html_template.replace('YOUR_API_KEY', self.api_key).replace('YOUR_SECRET_KEY',
-                                                                                        self.secret_key)
             with open('Stream.html', 'w') as file:
-                file.write(template)
-            return template
+                file.write(self.html_template)
+            return True
         except Exception as e:
             self.logger.error(f"Error creating HTML template: {str(e)}")
-            return None
+            return False
 
     async def connect(self):
         try:
@@ -163,13 +205,10 @@ class AlpacaStreamHandler:
             self.logger.info(f"Authentication response: {auth_data}")
 
             # Check for successful authentication
-            # Alpaca v2 WebSocket returns an array with authentication status
             if isinstance(auth_data, list) and auth_data[0].get('T') == 'success':
                 self.logger.info("WebSocket authentication successful")
                 return True
-            elif isinstance(auth_data, dict) and auth_data.get('stream') == 'authorization' and auth_data.get('data',
-                                                                                                              {}).get(
-                    'status') == 'authorized':
+            elif isinstance(auth_data, dict) and auth_data.get('stream') == 'authorization' and auth_data.get('data', {}).get('status') == 'authorized':
                 self.logger.info("WebSocket authentication successful")
                 return True
             else:
@@ -307,11 +346,6 @@ class AlpacaStreamHandler:
         except Exception as e:
             self.logger.error(f"Error updating chart: {str(e)}")
 
-    async def reconnect(self):
-        """Reconnect to the WebSocket server"""
-        self.logger.info("Attempting to reconnect...")
-        await self.connect()
-
     async def stream_listener(self):
         self.running = True
         while self.running:
@@ -329,14 +363,22 @@ class AlpacaStreamHandler:
                 await asyncio.sleep(5)
 
     async def start(self, symbols=['AAPL']):
-        # Load and open HTML template first
-        if self.load_html_template():
-            webbrowser.open('file://' + os.path.abspath('Stream.html'))
+        """Start both the local server and Alpaca connection."""
+        # Start local WebSocket server
+        server = await self.start_server()
 
-        # Then connect to WebSocket
+        # Load and open HTML template with symbol parameter
+        if self.load_html_template():
+            symbol = symbols[0] if symbols else 'AAPL'
+            webbrowser.open(f'file://{os.path.abspath("Stream.html")}?symbol={symbol}')
+
+        # Connect to Alpaca
         if await self.connect():
             await self.subscribe_to_market_data(symbols)
             await self.stream_listener()
+
+        # Keep the server running
+        await asyncio.Future()  # run forever
 
     async def stop(self):
         self.running = False
