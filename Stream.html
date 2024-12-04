@@ -16,14 +16,26 @@
             height: 800px;
             background-color: #131722;
         }
+        .price-info {
+            display: flex;
+            gap: 20px;
+            padding: 10px;
+            background-color: #1e222d;
+            border-radius: 4px;
+            margin-bottom: 10px;
+        }
     </style>
 </head>
 <body>
+    <div class="price-info">
+        <div id="ticker" style="font-size: 20px; font-weight: bold;">Loading...</div>
+        <div id="price-details"></div>
+    </div>
     <div id="chart"></div>
 
     <script>
         const ws = new WebSocket('ws://localhost:8765');
-
+        
         let candleData = {
             x: [],
             open: [],
@@ -32,15 +44,15 @@
             close: [],
             type: 'candlestick',
             increasing: {
-                line: { width: 2, color: '#26a69a' },
+                line: { width: 3, color: '#26a69a' },
                 fillcolor: '#26a69a'
             },
             decreasing: {
-                line: { width: 2, color: '#ef5350' },
+                line: { width: 3, color: '#ef5350' },
                 fillcolor: '#ef5350'
             },
-            whiskerwidth: 0.5,
-            width: 0.8  // Make candlesticks wider
+            whiskerwidth: 0.8,
+            width: 0.6
         };
 
         let layout = {
@@ -59,17 +71,19 @@
                 type: 'date',
                 gridcolor: '#1e222d',
                 linecolor: '#1e222d',
-                tickfont: { color: '#787b86' },
+                tickfont: { color: '#787b86', size: 12 },
                 tickformat: '%H:%M:%S',
-                showgrid: true
+                showgrid: true,
+                gridwidth: 1
             },
             yaxis: {
                 title: '',
                 gridcolor: '#1e222d',
                 linecolor: '#1e222d',
-                tickfont: { color: '#787b86' },
+                tickfont: { color: '#787b86', size: 12 },
                 showgrid: true,
-                fixedrange: false
+                gridwidth: 1,
+                tickformat: '.2f'
             },
             font: { color: '#787b86' }
         };
@@ -79,21 +93,38 @@
             displayModeBar: false
         });
 
+        function updatePriceInfo(data) {
+            const priceChange = data.close - data.open;
+            const color = priceChange >= 0 ? '#26a69a' : '#ef5350';
+            document.getElementById('price-details').innerHTML = `
+                <span style="color: ${color}">
+                    O: ${data.open.toFixed(2)} 
+                    H: ${data.high.toFixed(2)} 
+                    L: ${data.low.toFixed(2)} 
+                    C: ${data.close.toFixed(2)}
+                </span>
+                <span style="margin-left: 20px;">Vol: ${data.volume}</span>
+            `;
+        }
+
         ws.onmessage = function(event) {
             try {
                 const data = JSON.parse(event.data);
-
+                
+                if (data.symbol) {
+                    document.getElementById('ticker').textContent = data.symbol;
+                }
+                
                 if (data.candlestick) {
                     const timestamp = new Date(data.candlestick.timestamp);
-
-                    // Update candlestick data
+                    
                     candleData.x.push(timestamp);
                     candleData.open.push(data.candlestick.open);
                     candleData.high.push(data.candlestick.high);
                     candleData.low.push(data.candlestick.low);
                     candleData.close.push(data.candlestick.close);
 
-                    // Keep only last 100 points
+                    // Keep last 100 points
                     if (candleData.x.length > 100) {
                         candleData.x.shift();
                         candleData.open.shift();
@@ -102,7 +133,8 @@
                         candleData.close.shift();
                     }
 
-                    // Update the chart
+                    updatePriceInfo(data.candlestick);
+
                     Plotly.update('chart', 
                         {
                             x: [candleData.x],
@@ -123,17 +155,6 @@
                 console.error('Error processing message:', error);
             }
         };
-
-        // Auto-update range every second
-        setInterval(function() {
-            if (candleData.x.length > 0) {
-                const now = new Date();
-                const thirtyMinutesAgo = new Date(now - 30 * 60 * 1000);
-                Plotly.relayout('chart', {
-                    'xaxis.range': [thirtyMinutesAgo, now]
-                });
-            }
-        }, 1000);
     </script>
 </body>
 </html>
