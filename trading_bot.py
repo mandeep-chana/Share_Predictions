@@ -17,6 +17,7 @@ import webbrowser
 class AlpacaStreamHandler:
 
         def __init__(self, api_key, secret_key, logger, ticker):
+            """Initialize the ENTER class"""
             self.api_key = api_key
             self.secret_key = secret_key
             self.logger = logger
@@ -27,6 +28,42 @@ class AlpacaStreamHandler:
             self.running = False
             self.candlestick_data = []
 
+        async def connect_to_alpaca(self):
+            """Connect to Alpaca WebSocket stream"""
+            try:
+                auth_data = {
+                    "action": "auth",
+                    "key": self.api_key,
+                    "secret": self.secret_key
+                }
+                self.ws = await websockets.connect('wss://stream.data.alpaca.markets/v2/iex')
+                await self.ws.send(json.dumps(auth_data))
+                response = await self.ws.recv()
+                self.logger.info(f"Authentication response: {response}")
+
+                # Subscribe to market data
+                await self.subscribe_to_market_data([self.ticker])
+            except Exception as e:
+                self.logger.error(f"Connection error: {str(e)}")
+                raise
+
+        async def subscribe_to_market_data(self, symbols):
+            """Subscribe to market data for specified symbols"""
+            try:
+                subscribe_message = {
+                    "action": "subscribe",
+                    "bars": symbols,
+                    "trades": symbols,  # Subscribe to both bars and trades
+                    "quotes": symbols  # Add quotes subscription
+                }
+                self.logger.debug(f"Sending subscription message: {subscribe_message}")
+                await self.ws.send(json.dumps(subscribe_message))
+                response = await self.ws.recv()
+                self.logger.info(f"Subscription response: {response}")
+            except Exception as e:
+                self.logger.error(f"Subscription error: {str(e)}")
+                raise
+
         def load_html_template(self):
             """Load and customize the HTML template"""
             html_content = '''
@@ -35,37 +72,106 @@ class AlpacaStreamHandler:
             <head>
                 <title>Real-time Stock Chart</title>
                 <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+                <style>
+                    body {
+                        font-family: Arial, sans-serif;
+                        margin: 20px;
+                        background-color: #f0f0f0;
+                    }
+                    #chart {
+                        background-color: white;
+                        padding: 20px;
+                        border-radius: 10px;
+                        box-shadow: 0 0 10px rgba(0,0,0,0.1);
+                    }
+                    h2 {
+                        color: #333;
+                    }
+                </style>
             </head>
             <body>
                 <h2>Real-time Stock Chart for <span id="ticker"></span></h2>
                 <div id="chart"></div>
                 <script>
-                    const ws = new WebSocket('ws://localhost:8765');
-                    let trace = {
-                        x: [],
-                        y: [],
-                        type: 'scatter',
-                        mode: 'lines',
-                        name: 'Price'
-                    };
-                    let layout = {
-                        title: 'Real-time Stock Price',
-                        xaxis: { title: 'Time' },
-                        yaxis: { title: 'Price' }
-                    };
-                    Plotly.newPlot('chart', [trace], layout);
+                const ws = new WebSocket('ws://localhost:8765');
+                let trace = {
+                    x: [],
+                    open: [],
+                    high: [],
+                    low: [],
+                    close: [],
+                    type: 'candlestick',
+                    xaxis: 'x',
+                    yaxis: 'y'
+                };
 
-                    ws.onmessage = function(event) {
-                        const data = JSON.parse(event.data);
-                        if (data.symbol) {
-                            document.getElementById('ticker').textContent = data.symbol;
+                let layout = {
+                    title: 'Real-time Candlestick Chart',
+                    xaxis: { 
+                        title: 'Time',
+                        rangeslider: {visible: false},
+                        type: 'date',
+                        tickformat: '%H:%M:%S'
+                    },
+                    yaxis: { 
+                        title: 'Price',
+                        autorange: true
+                    },
+                    plot_bgcolor: 'white',
+                    paper_bgcolor: 'white'
+                };
+
+                Plotly.newPlot('chart', [trace], layout);
+
+                // Update interval (1 second)
+                const updateInterval = 1000;
+                let lastUpdate = Date.now();
+
+                ws.onmessage = function(event) {
+                    const data = JSON.parse(event.data);
+                    if (data.symbol) {
+                        document.getElementById('ticker').textContent = data.symbol;
+                    }
+                    if (data.candlestick) {
+                        const now = Date.now();
+                        if (now - lastUpdate >= updateInterval) {
+                            trace.x.push(new Date(data.candlestick.timestamp));
+                            trace.open.push(data.candlestick.open);
+                            trace.high.push(data.candlestick.high);
+                            trace.low.push(data.candlestick.low);
+                            trace.close.push(data.candlestick.close);
+
+                            // Update the chart without limiting the number of candlesticks
+                            Plotly.update('chart', [trace], {
+                                'xaxis.range': [
+                                    new Date(Date.now() - 30 * 60 * 1000), // Show last 30 minutes
+                                    new Date(Date.now())
+                                ]
+                            });
+
+                            lastUpdate = now;
                         }
-                        if (data.price && data.timestamp) {
-                            trace.x.push(new Date(data.timestamp));
-                            trace.y.push(data.price);
-                            Plotly.update('chart', [trace], layout);
-                        }
-                    };
+                    }
+                };
+
+                // Add auto-scrolling functionality
+                let autoScroll = true;
+                document.getElementById('chart').on('plotly_click', function() {
+                    autoScroll = !autoScroll;
+                });
+
+                // Update the visible range every second if auto-scroll is enabled
+                setInterval(function() {
+                    if (autoScroll && trace.x.length > 0) {
+                        const now = Date.now();
+                        Plotly.relayout('chart', {
+                            'xaxis.range': [
+                                new Date(now - 30 * 60 * 1000), // Show last 30 minutes
+                                new Date(now)
+                            ]
+                        });
+                    }
+                }, 1000);
                 </script>
             </body>
             </html>
@@ -82,14 +188,22 @@ class AlpacaStreamHandler:
 
                 # Send initial ticker information
                 initial_message = {
-                    "symbol": self.ticker
+                    "symbol": self.ticker,
+                    "candlestick": {
+                        "timestamp": datetime.now().isoformat(),
+                        "open": 0,
+                        "high": 0,
+                        "low": 0,
+                        "close": 0,
+                        "volume": 0
+                    }
                 }
                 await websocket.send(json.dumps(initial_message))
+                self.logger.info("Sent initial test message")
 
                 try:
                     async for message in websocket:
-                        # Handle any messages from the client if needed
-                        pass
+                        self.logger.debug(f"Received client message: {message}")
                 except websockets.exceptions.ConnectionClosed:
                     pass
                 finally:
@@ -98,203 +212,247 @@ class AlpacaStreamHandler:
             except Exception as e:
                 self.logger.error(f"Error handling client connection: {str(e)}")
 
-        async def connect(self):
-            """Connect to Alpaca WebSocket"""
-            try:
-                self.ws = await websockets.connect('wss://stream.data.alpaca.markets/v2/iex')
-                self.logger.info("Connected to Alpaca WebSocket")
-            except Exception as e:
-                self.logger.error(f"Error connecting to Alpaca WebSocket: {str(e)}")
-                raise
-
-        async def authenticate(self):
-            """Authenticate with Alpaca"""
-            try:
-                auth_message = {
-                    "action": "auth",
-                    "key": self.api_key,
-                    "secret": self.secret_key
-                }
-                await self.ws.send(json.dumps(auth_message))
-                response = await self.ws.recv()
-                self.logger.info(f"Authentication response: {response}")
-            except Exception as e:
-                self.logger.error(f"Authentication error: {str(e)}")
-                raise
-
-        async def subscribe_to_market_data(self, symbols):
-            """Subscribe to market data for specified symbols"""
-            try:
-                subscribe_message = {
-                    "action": "subscribe",
-                    "trades": symbols,
-                    "quotes": symbols,
-                    "bars": symbols
-                }
-                await self.ws.send(json.dumps(subscribe_message))
-                response = await self.ws.recv()
-                self.logger.info(f"Subscription response: {response}")
-            except Exception as e:
-                self.logger.error(f"Subscription error: {str(e)}")
-                raise
+        async def broadcast_to_clients(self, message):
+            """Broadcast message to all connected clients"""
+            if self.websocket_clients:
+                await asyncio.gather(
+                    *[client.send(json.dumps(message)) for client in self.websocket_clients.copy()]
+                )
 
         async def handle_message(self, message):
             """Handle incoming messages from Alpaca"""
             try:
                 data = json.loads(message)
+                self.logger.debug(f"Received raw message: {message}")
+
                 if isinstance(data, list) and len(data) > 0:
                     for msg in data:
-                        if msg.get('T') == 't':  # Trade message
-                            await self.broadcast_to_clients({
+                        self.logger.debug(f"Processing message: {msg}")
+
+                        # Handle bar data
+                        if msg.get('T') == 'b':  # Only handle bar data for candlesticks
+                            timestamp = msg.get('t')
+                            if not timestamp:
+                                self.logger.warning("Missing timestamp in message")
+                                continue
+
+                            # Create candlestick data with proper formatting
+                            candlestick_data = {
                                 'symbol': msg.get('S'),
-                                'price': msg.get('p'),
-                                'timestamp': msg.get('t')
-                            })
+                                'candlestick': {
+                                    'timestamp': timestamp,
+                                    'open': float(msg.get('o', 0)),
+                                    'high': float(msg.get('h', 0)),
+                                    'low': float(msg.get('l', 0)),
+                                    'close': float(msg.get('c', 0)),
+                                    'volume': float(msg.get('v', 0))
+                                }
+                            }
+
+                            self.logger.debug(f"Broadcasting candlestick data: {candlestick_data}")
+                            await self.broadcast_to_clients(candlestick_data)
+                            self.logger.info(f"Sent candlestick data for {msg.get('S')} at {timestamp}")
+
+            except json.JSONDecodeError as e:
+                self.logger.error(f"JSON decode error: {str(e)}, Message: {message}")
             except Exception as e:
-                self.logger.error(f"Error handling message: {str(e)}")
-
-        async def broadcast_to_clients(self, message):
-            """Broadcast message to all connected clients"""
-            if self.websocket_clients:
-                disconnected_clients = set()
-                for client in self.websocket_clients:
-                    try:
-                        await client.send(json.dumps(message))
-                    except websockets.exceptions.ConnectionClosed:
-                        disconnected_clients.add(client)
-                    except Exception as e:
-                        self.logger.error(f"Error broadcasting to client: {str(e)}")
-                        disconnected_clients.add(client)
-
-                # Remove disconnected clients
-                self.websocket_clients -= disconnected_clients
-
-        async def stream_listener(self):
-            """Listen for messages from Alpaca WebSocket"""
-            try:
-                while self.running:
-                    if self.ws:
-                        message = await self.ws.recv()
-                        await self.handle_message(message)
-                    else:
-                        self.logger.error("WebSocket connection not established")
-                        await asyncio.sleep(5)
-                        await self.reconnect()
-            except websockets.exceptions.ConnectionClosed:
-                self.logger.error("WebSocket connection closed")
-                await self.reconnect()
-            except Exception as e:
-                self.logger.error(f"Stream listener error: {str(e)}")
-                await asyncio.sleep(5)
-
-        async def reconnect(self):
-            """Reconnect to Alpaca WebSocket"""
-            try:
-                self.logger.info("Attempting to reconnect...")
-                await self.connect()
-                await self.authenticate()
-                await self.subscribe_to_market_data([self.ticker])
-            except Exception as e:
-                self.logger.error(f"Error reconnecting: {str(e)}")
+                self.logger.error(f"Error handling message: {str(e)}", exc_info=True)
 
         async def start(self):
             """Start the WebSocket server and connect to Alpaca"""
             try:
-                self.logger.info("=== Starting AlpacaStreamHandler ===")
+                self.logger.info("Starting local WebSocket server...")
+                self.load_html_template()
 
                 # Start local WebSocket server
-                self.logger.info("Starting local WebSocket server...")
-                self.websocket = await websockets.serve(
+                start_server = websockets.serve(
                     self.handle_client,
-                    'localhost',
+                    "localhost",
                     8765
                 )
-                self.logger.info("Local WebSocket server started on ws://localhost:8765")
+                await start_server
 
-                # Connect to Alpaca WebSocket
-                self.logger.info("Connecting to Alpaca WebSocket...")
-                await self.connect()
-                self.logger.info("Connected to Alpaca WebSocket")
-
-                # Authenticate
-                self.logger.info("Authenticating with Alpaca...")
-                await self.authenticate()
-                self.logger.info("Authentication successful")
-
-                # Subscribe to market data
-                self.logger.info(f"Subscribing to market data for {self.ticker}...")
-                await self.subscribe_to_market_data([self.ticker])
-                self.logger.info("Market data subscription successful")
-
-                # Start listening for messages
-                self.logger.info("Starting message listener...")
+                # Connect to Alpaca
+                await self.connect_to_alpaca()
                 self.running = True
 
-                # Keep the WebSocket connection alive
-                while True:
+                # Main message loop
+                while self.running:
                     try:
-                        await self.stream_listener()
+                        message = await self.ws.recv()
+                        await self.handle_message(message)
                     except websockets.exceptions.ConnectionClosed:
-                        self.logger.error("WebSocket connection closed")
-                        await self.reconnect()
+                        self.logger.error("Connection to Alpaca closed unexpectedly")
+                        break
                     except Exception as e:
-                        self.logger.error(f"Error in stream listener: {str(e)}")
-                        await asyncio.sleep(5)  # Wait before retrying
+                        self.logger.error(f"Error in message loop: {str(e)}")
+                        break
 
             except Exception as e:
-                self.logger.error(f"Error in start method: {str(e)}", exc_info=True)
+                self.logger.error(f"Error in start method: {str(e)}")
                 raise
 
+        async def stop(self):
+            """Stop the WebSocket server and disconnect from Alpaca"""
+            self.running = False
+            if self.ws:
+                await self.ws.close()
+            # Close all client connections
+            if self.websocket_clients:
+                await asyncio.gather(*[client.close() for client in self.websocket_clients])
+            self.websocket_clients.clear()
+
 def optimize_strategy(analyzer, strategy_class, parameter_ranges):
-    """Optimize strategy parameters using grid search"""
+    """Optimize strategy parameters using grid search with improved error handling"""
     try:
         logging.info(f"Starting strategy optimization for {analyzer.ticker_symbol}")
 
         best_params = None
-        best_sharpe = float('-inf')
+        best_score = float('-inf')
         results = []
 
         # Generate parameter combinations
         param_combinations = [dict(zip(parameter_ranges.keys(), v))
                             for v in itertools.product(*parameter_ranges.values())]
 
+        # Add progress tracking
+        total_combinations = len(param_combinations)
+        processed = 0
+
         for params in param_combinations:
             try:
+                processed += 1
+                logging.info(f"Testing combination {processed}/{total_combinations}: {params}")
+
                 # Create strategy with current parameters
                 strategy = type('OptimizedStrategy', (strategy_class,), params)
 
-                # Run backtest with error handling
+                # Run backtest with improved error handling
                 bt = Backtest(analyzer.stock_data, strategy, cash=10000, commission=.002)
-                with np.errstate(divide='ignore', invalid='ignore'):  # Handle divide by zero
+
+                # Suppress numpy warnings and handle division by zero
+                with np.errstate(divide='ignore', invalid='ignore'):
                     stats = bt.run()
 
-                # Extract results and handle potential NaN values
-                result = {
-                    'parameters': params,
-                    'sharpe_ratio': float(stats['Sharpe Ratio']) if not np.isnan(stats['Sharpe Ratio']) else -999,
-                    'return_pct': float(stats['Return [%]']) if not np.isnan(stats['Return [%]']) else 0,
-                    'max_drawdown': float(stats['Max. Drawdown [%]']) if not np.isnan(stats['Max. Drawdown [%]']) else -100,
-                    'win_rate': float(stats['Win Rate [%]']) if not np.isnan(stats['Win Rate [%]']) else 0,
-                    'profit_factor': float(stats.get('Profit Factor', 0)) if not np.isnan(stats.get('Profit Factor', 0)) else 0,
-                    'num_trades': int(stats['# Trades'])
-                }
+                    # Calculate metrics with safety checks
+                    sharpe_ratio = float(stats['Sharpe Ratio']) if not np.isnan(stats['Sharpe Ratio']) and not np.isinf(stats['Sharpe Ratio']) else -999
+                    return_pct = float(stats['Return [%]']) if not np.isnan(stats['Return [%]']) else 0
+                    max_drawdown = float(stats['Max. Drawdown [%]']) if not np.isnan(stats['Max. Drawdown [%]']) else -100
+                    win_rate = float(stats['Win Rate [%]']) if not np.isnan(stats['Win Rate [%]']) else 0
+                    profit_factor = float(stats.get('Profit Factor', 0)) if not np.isnan(stats.get('Profit Factor', 0)) else 0
+                    num_trades = int(stats['# Trades'])
 
-                results.append(result)
+                    # Skip invalid combinations
+                    if num_trades == 0:
+                        continue
 
-                # Update best parameters if necessary
-                if result['sharpe_ratio'] > best_sharpe and result['sharpe_ratio'] != -999:
-                    best_sharpe = result['sharpe_ratio']
-                    best_params = params.copy()
+                    # Calculate composite score
+                    score = calculate_strategy_score(
+                        sharpe_ratio=sharpe_ratio,
+                        return_pct=return_pct,
+                        max_drawdown=max_drawdown,
+                        win_rate=win_rate,
+                        profit_factor=profit_factor,
+                        num_trades=num_trades
+                    )
+
+                    result = {
+                        'parameters': params,
+                        'score': score,
+                        'sharpe_ratio': sharpe_ratio,
+                        'return_pct': return_pct,
+                        'max_drawdown': max_drawdown,
+                        'win_rate': win_rate,
+                        'profit_factor': profit_factor,
+                        'num_trades': num_trades
+                    }
+
+                    results.append(result)
+
+                    # Update best parameters if better score found
+                    if score > best_score:
+                        best_score = score
+                        best_params = params.copy()
+                        logging.info(f"New best parameters found: {best_params} (Score: {best_score:.2f})")
 
             except Exception as e:
                 logging.warning(f"Error in parameter combination {params}: {str(e)}")
                 continue
 
-        return best_params, pd.DataFrame(results)
+        # If no valid results found, use default parameters
+        if not best_params:
+            logging.warning("No optimal parameters found, using default parameters")
+            best_params = {
+                'bb_window': 20,
+                'bb_std': 2.0,
+                'rsi_window': 14,
+                'rsi_upper': 70,
+                'rsi_lower': 30
+            }
+
+        logging.info(f"Optimization completed. Best parameters: {best_params}")
+
+        # Create summary of results
+        if results:
+            results_df = pd.DataFrame(results)
+            summary = create_optimization_summary(results_df, analyzer.ticker_symbol)
+            logging.info("\nOptimization Summary:\n" + summary)
+
+        return best_params, pd.DataFrame(results) if results else None
 
     except Exception as e:
         logging.error(f"Error in strategy optimization: {str(e)}")
         return None, None
+
+def calculate_strategy_score(sharpe_ratio, return_pct, max_drawdown, win_rate, profit_factor, num_trades):
+    """Calculate a composite score for strategy evaluation"""
+    try:
+        # Normalize and weight different metrics
+        normalized_sharpe = min(max(sharpe_ratio, -3), 3) / 3  # Normalize between -1 and 1
+        normalized_return = min(max(return_pct, -100), 100) / 100  # Normalize between -1 and 1
+        normalized_drawdown = (max_drawdown + 100) / 100  # Normalize between 0 and 1
+        normalized_winrate = win_rate / 100  # Already between 0 and 1
+        normalized_trades = min(num_trades / 100, 1)  # Normalize with max at 100 trades
+
+        # Weighted sum of metrics
+        score = (
+            0.3 * normalized_sharpe +
+            0.25 * normalized_return +
+            0.2 * (1 - normalized_drawdown) +  # Invert drawdown so higher is better
+            0.15 * normalized_winrate +
+            0.1 * normalized_trades
+        )
+
+        return score
+
+    except Exception as e:
+        logging.error(f"Error calculating strategy score: {str(e)}")
+        return float('-inf')
+
+def create_optimization_summary(results_df, ticker):
+    """Create a summary of optimization results"""
+    try:
+        summary = f"\nOptimization Summary for {ticker}\n"
+        summary += "=" * 50 + "\n"
+
+        # Best strategy details
+        best_row = results_df.loc[results_df['score'].idxmax()]
+        summary += f"Best Strategy Parameters:\n"
+        for param, value in best_row['parameters'].items():
+            summary += f"  {param}: {value}\n"
+
+        summary += f"\nPerformance Metrics:\n"
+        summary += f"  Sharpe Ratio: {best_row['sharpe_ratio']:.2f}\n"
+        summary += f"  Return: {best_row['return_pct']:.2f}%\n"
+        summary += f"  Max Drawdown: {best_row['max_drawdown']:.2f}%\n"
+        summary += f"  Win Rate: {best_row['win_rate']:.2f}%\n"
+        summary += f"  Number of Trades: {best_row['num_trades']}\n"
+
+        return summary
+
+    except Exception as e:
+        logging.error(f"Error creating optimization summary: {str(e)}")
+        return "Error creating optimization summary"
 
 def setup_logging():
     """Set up logging configuration"""

@@ -4,37 +4,106 @@
             <head>
                 <title>Real-time Stock Chart</title>
                 <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+                <style>
+                    body {
+                        font-family: Arial, sans-serif;
+                        margin: 20px;
+                        background-color: #f0f0f0;
+                    }
+                    #chart {
+                        background-color: white;
+                        padding: 20px;
+                        border-radius: 10px;
+                        box-shadow: 0 0 10px rgba(0,0,0,0.1);
+                    }
+                    h2 {
+                        color: #333;
+                    }
+                </style>
             </head>
             <body>
                 <h2>Real-time Stock Chart for <span id="ticker"></span></h2>
                 <div id="chart"></div>
                 <script>
-                    const ws = new WebSocket('ws://localhost:8765');
-                    let trace = {
-                        x: [],
-                        y: [],
-                        type: 'scatter',
-                        mode: 'lines',
-                        name: 'Price'
-                    };
-                    let layout = {
-                        title: 'Real-time Stock Price',
-                        xaxis: { title: 'Time' },
-                        yaxis: { title: 'Price' }
-                    };
-                    Plotly.newPlot('chart', [trace], layout);
+                const ws = new WebSocket('ws://localhost:8765');
+                let trace = {
+                    x: [],
+                    open: [],
+                    high: [],
+                    low: [],
+                    close: [],
+                    type: 'candlestick',
+                    xaxis: 'x',
+                    yaxis: 'y'
+                };
 
-                    ws.onmessage = function(event) {
-                        const data = JSON.parse(event.data);
-                        if (data.symbol) {
-                            document.getElementById('ticker').textContent = data.symbol;
+                let layout = {
+                    title: 'Real-time Candlestick Chart',
+                    xaxis: { 
+                        title: 'Time',
+                        rangeslider: {visible: false},
+                        type: 'date',
+                        tickformat: '%H:%M:%S'
+                    },
+                    yaxis: { 
+                        title: 'Price',
+                        autorange: true
+                    },
+                    plot_bgcolor: 'white',
+                    paper_bgcolor: 'white'
+                };
+
+                Plotly.newPlot('chart', [trace], layout);
+
+                // Update interval (1 second)
+                const updateInterval = 1000;
+                let lastUpdate = Date.now();
+
+                ws.onmessage = function(event) {
+                    const data = JSON.parse(event.data);
+                    if (data.symbol) {
+                        document.getElementById('ticker').textContent = data.symbol;
+                    }
+                    if (data.candlestick) {
+                        const now = Date.now();
+                        if (now - lastUpdate >= updateInterval) {
+                            trace.x.push(new Date(data.candlestick.timestamp));
+                            trace.open.push(data.candlestick.open);
+                            trace.high.push(data.candlestick.high);
+                            trace.low.push(data.candlestick.low);
+                            trace.close.push(data.candlestick.close);
+
+                            // Update the chart without limiting the number of candlesticks
+                            Plotly.update('chart', [trace], {
+                                'xaxis.range': [
+                                    new Date(Date.now() - 30 * 60 * 1000), // Show last 30 minutes
+                                    new Date(Date.now())
+                                ]
+                            });
+
+                            lastUpdate = now;
                         }
-                        if (data.price && data.timestamp) {
-                            trace.x.push(new Date(data.timestamp));
-                            trace.y.push(data.price);
-                            Plotly.update('chart', [trace], layout);
-                        }
-                    };
+                    }
+                };
+
+                // Add auto-scrolling functionality
+                let autoScroll = true;
+                document.getElementById('chart').on('plotly_click', function() {
+                    autoScroll = !autoScroll;
+                });
+
+                // Update the visible range every second if auto-scroll is enabled
+                setInterval(function() {
+                    if (autoScroll && trace.x.length > 0) {
+                        const now = Date.now();
+                        Plotly.relayout('chart', {
+                            'xaxis.range': [
+                                new Date(now - 30 * 60 * 1000), // Show last 30 minutes
+                                new Date(now)
+                            ]
+                        });
+                    }
+                }, 1000);
                 </script>
             </body>
             </html>
