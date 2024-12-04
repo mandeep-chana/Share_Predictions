@@ -73,105 +73,129 @@ class AlpacaStreamHandler:
                 <title>Real-time Stock Chart</title>
                 <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
                 <style>
-                    body {
-                        font-family: Arial, sans-serif;
-                        margin: 20px;
-                        background-color: #f0f0f0;
-                    }
-                    #chart {
-                        background-color: white;
-                        padding: 20px;
-                        border-radius: 10px;
-                        box-shadow: 0 0 10px rgba(0,0,0,0.1);
-                    }
-                    h2 {
-                        color: #333;
-                    }
+                    body { font-family: Arial, sans-serif; margin: 20px; background-color: #f0f0f0; }
+                    #chart { background-color: white; padding: 20px; border-radius: 10px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+                    #debug-panel { margin-top: 10px; padding: 10px; background-color: white; border-radius: 5px; }
+                    .status { margin: 10px 0; padding: 10px; background-color: white; border-radius: 5px; }
                 </style>
             </head>
             <body>
-                <h2>Real-time Stock Chart for <span id="ticker"></span></h2>
+                <h2>Real-time Stock Chart for <span id="ticker">Loading...</span></h2>
+                <div class="status">
+                    Connection Status: <span id="connection-status">Connecting...</span>
+                    <button onclick="toggleDebug()">Toggle Debug</button>
+                </div>
                 <div id="chart"></div>
+                <div id="debug-panel"></div>
+
                 <script>
-                const ws = new WebSocket('ws://localhost:8765');
-                let trace = {
-                    x: [],
-                    open: [],
-                    high: [],
-                    low: [],
-                    close: [],
-                    type: 'candlestick',
-                    xaxis: 'x',
-                    yaxis: 'y'
-                };
-
-                let layout = {
-                    title: 'Real-time Candlestick Chart',
-                    xaxis: { 
-                        title: 'Time',
-                        rangeslider: {visible: false},
-                        type: 'date',
-                        tickformat: '%H:%M:%S'
-                    },
-                    yaxis: { 
-                        title: 'Price',
-                        autorange: true
-                    },
-                    plot_bgcolor: 'white',
-                    paper_bgcolor: 'white'
-                };
-
-                Plotly.newPlot('chart', [trace], layout);
-
-                // Update interval (1 second)
-                const updateInterval = 1000;
-                let lastUpdate = Date.now();
-
-                ws.onmessage = function(event) {
-                    const data = JSON.parse(event.data);
-                    if (data.symbol) {
-                        document.getElementById('ticker').textContent = data.symbol;
+                    // Debug functionality
+                    function debugLog(message) {
+                        console.log(message);
+                        const debugPanel = document.getElementById('debug-panel');
+                        const timestamp = new Date().toISOString();
+                        debugPanel.innerHTML = `${timestamp}: ${message}<br>` + debugPanel.innerHTML;
                     }
-                    if (data.candlestick) {
-                        const now = Date.now();
-                        if (now - lastUpdate >= updateInterval) {
-                            trace.x.push(new Date(data.candlestick.timestamp));
-                            trace.open.push(data.candlestick.open);
-                            trace.high.push(data.candlestick.high);
-                            trace.low.push(data.candlestick.low);
-                            trace.close.push(data.candlestick.close);
 
-                            // Update the chart without limiting the number of candlesticks
-                            Plotly.update('chart', [trace], {
-                                'xaxis.range': [
-                                    new Date(Date.now() - 30 * 60 * 1000), // Show last 30 minutes
-                                    new Date(Date.now())
-                                ]
-                            });
+                    function toggleDebug() {
+                        const debugPanel = document.getElementById('debug-panel');
+                        debugPanel.style.display = debugPanel.style.display === 'none' ? 'block' : 'none';
+                    }
 
-                            lastUpdate = now;
+                    const ws = new WebSocket('ws://localhost:8765');
+                    let trace = {
+                        x: [],
+                        open: [],
+                        high: [],
+                        low: [],
+                        close: [],
+                        type: 'candlestick',
+                        xaxis: 'x',
+                        yaxis: 'y'
+                    };
+
+                    let layout = {
+                        title: 'Real-time Candlestick Chart',
+                        xaxis: { 
+                            title: 'Time',
+                            rangeslider: {visible: false},
+                            type: 'date',
+                            tickformat: '%H:%M:%S'
+                        },
+                        yaxis: { 
+                            title: 'Price',
+                            autorange: true
+                        },
+                        plot_bgcolor: 'white',
+                        paper_bgcolor: 'white'
+                    };
+
+                    Plotly.newPlot('chart', [trace], layout);
+
+                    ws.onopen = function() {
+                        debugLog('WebSocket Connected');
+                        document.getElementById('connection-status').textContent = 'Connected';
+                        document.getElementById('connection-status').style.color = 'green';
+                    };
+
+                    ws.onclose = function() {
+                        debugLog('WebSocket Disconnected');
+                        document.getElementById('connection-status').textContent = 'Disconnected';
+                        document.getElementById('connection-status').style.color = 'red';
+                    };
+
+                    ws.onmessage = function(event) {
+                        try {
+                            debugLog('Received message: ' + event.data);
+                            const data = JSON.parse(event.data);
+
+                            if (data.symbol) {
+                                document.getElementById('ticker').textContent = data.symbol;
+                            }
+
+                            if (data.candlestick) {
+                                debugLog('Processing candlestick: ' + JSON.stringify(data.candlestick));
+
+                                const timestamp = new Date(data.candlestick.timestamp);
+                                trace.x.push(timestamp);
+                                trace.open.push(data.candlestick.open);
+                                trace.high.push(data.candlestick.high);
+                                trace.low.push(data.candlestick.low);
+                                trace.close.push(data.candlestick.close);
+
+                                debugLog(`Added point: Time=${timestamp.toLocaleTimeString()}, O=${data.candlestick.open}, H=${data.candlestick.high}, L=${data.candlestick.low}, C=${data.candlestick.close}`);
+
+                                // Update the chart
+                                Plotly.update('chart', {
+                                    x: [trace.x],
+                                    open: [trace.open],
+                                    high: [trace.high],
+                                    low: [trace.low],
+                                    close: [trace.close]
+                                }).then(() => {
+                                    debugLog('Chart updated successfully');
+                                }).catch(error => {
+                                    debugLog('Error updating chart: ' + error);
+                                });
+                            }
+                        } catch (error) {
+                            debugLog('Error processing message: ' + error);
                         }
-                    }
-                };
+                    };
 
-                // Add auto-scrolling functionality
-                let autoScroll = true;
-                document.getElementById('chart').on('plotly_click', function() {
-                    autoScroll = !autoScroll;
-                });
+                    // Auto-scroll functionality
+                    setInterval(function() {
+                        if (trace.x.length > 0) {
+                            const now = new Date();
+                            const thirtyMinutesAgo = new Date(now - 30 * 60 * 1000);
 
-                // Update the visible range every second if auto-scroll is enabled
-                setInterval(function() {
-                    if (autoScroll && trace.x.length > 0) {
-                        const now = Date.now();
-                        Plotly.relayout('chart', {
-                            'xaxis.range': [
-                                new Date(now - 30 * 60 * 1000), // Show last 30 minutes
-                                new Date(now)
-                            ]
-                        });
-                    }
-                }, 1000);
+                            Plotly.relayout('chart', {
+                                'xaxis.range': [thirtyMinutesAgo, now]
+                            }).catch(error => {
+                                debugLog('Error updating range: ' + error);
+                            });
+                        }
+                    }, 1000);
                 </script>
             </body>
             </html>
@@ -230,28 +254,26 @@ class AlpacaStreamHandler:
                         self.logger.debug(f"Processing message: {msg}")
 
                         # Handle bar data
-                        if msg.get('T') == 'b':  # Only handle bar data for candlesticks
-                            timestamp = msg.get('t')
-                            if not timestamp:
-                                self.logger.warning("Missing timestamp in message")
-                                continue
-
-                            # Create candlestick data with proper formatting
-                            candlestick_data = {
-                                'symbol': msg.get('S'),
-                                'candlestick': {
-                                    'timestamp': timestamp,
-                                    'open': float(msg.get('o', 0)),
-                                    'high': float(msg.get('h', 0)),
-                                    'low': float(msg.get('l', 0)),
-                                    'close': float(msg.get('c', 0)),
-                                    'volume': float(msg.get('v', 0))
+                        if msg.get('T') == 'b':  # Bar data
+                            # Extract and validate data
+                            if all(key in msg for key in ['t', 'o', 'h', 'l', 'c', 'v', 'S']):
+                                candlestick_data = {
+                                    'symbol': msg['S'],
+                                    'candlestick': {
+                                        'timestamp': msg['t'],
+                                        'open': float(msg['o']),
+                                        'high': float(msg['h']),
+                                        'low': float(msg['l']),
+                                        'close': float(msg['c']),
+                                        'volume': float(msg['v'])
+                                    }
                                 }
-                            }
 
-                            self.logger.debug(f"Broadcasting candlestick data: {candlestick_data}")
-                            await self.broadcast_to_clients(candlestick_data)
-                            self.logger.info(f"Sent candlestick data for {msg.get('S')} at {timestamp}")
+                                self.logger.debug(f"Broadcasting candlestick data: {candlestick_data}")
+                                await self.broadcast_to_clients(candlestick_data)
+                                self.logger.info(f"Sent candlestick data: {candlestick_data}")
+                            else:
+                                self.logger.warning(f"Incomplete bar data received: {msg}")
 
             except json.JSONDecodeError as e:
                 self.logger.error(f"JSON decode error: {str(e)}, Message: {message}")
