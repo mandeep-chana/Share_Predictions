@@ -74,36 +74,48 @@ class AlpacaStreamHandler:
     <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
     <style>
         body { 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+            background-color: #131722;
             margin: 0;
             padding: 20px;
-            background-color: #131722;
-            color: #d1d4dc;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
         }
         #chart { 
             height: 800px;
             background-color: #131722;
         }
-        .price-info {
-            display: flex;
-            gap: 20px;
+        .chart-container {
+            padding: 20px;
+            border-radius: 5px;
+        }
+        .header {
+            color: #ffffff;
             padding: 10px;
-            background-color: #1e222d;
-            border-radius: 4px;
             margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+        }
+        .price-info {
+            margin-left: 20px;
+            font-size: 14px;
+            color: #787b86;
         }
     </style>
 </head>
 <body>
-    <div class="price-info">
-        <div id="ticker" style="font-size: 20px; font-weight: bold;">Loading...</div>
-        <div id="price-details"></div>
+    <div class="chart-container">
+        <div class="header">
+            <h2 id="symbol">Loading...</h2>
+            <div class="price-info">
+                <span id="price">Price: --</span>
+                <span id="volume">Volume: --</span>
+            </div>
+        </div>
+        <div id="chart"></div>
     </div>
-    <div id="chart"></div>
 
     <script>
         const ws = new WebSocket('ws://localhost:8765');
-        
+
         let candleData = {
             x: [],
             open: [],
@@ -112,85 +124,91 @@ class AlpacaStreamHandler:
             close: [],
             type: 'candlestick',
             increasing: {
-                line: { width: 3, color: '#26a69a' },
+                line: { width: 2, color: '#26a69a' },
                 fillcolor: '#26a69a'
             },
             decreasing: {
-                line: { width: 3, color: '#ef5350' },
+                line: { width: 2, color: '#ef5350' },
                 fillcolor: '#ef5350'
             },
-            whiskerwidth: 0.8,
-            width: 0.6
+            whiskerwidth: 1,
+            width: 0.7
+        };
+
+        let volumeData = {
+            x: [],
+            y: [],
+            type: 'bar',
+            yaxis: 'y2',
+            marker: {
+                color: [],
+                line: { width: 0 }
+            },
+            opacity: 0.5
         };
 
         let layout = {
             plot_bgcolor: '#131722',
             paper_bgcolor: '#131722',
             dragmode: 'zoom',
-            margin: {
-                r: 60,
-                t: 25,
-                b: 40,
-                l: 60
-            },
+            margin: { r: 60, t: 25, b: 40, l: 60 },
             showlegend: false,
             xaxis: {
                 rangeslider: { visible: false },
                 type: 'date',
                 gridcolor: '#1e222d',
                 linecolor: '#1e222d',
-                tickfont: { color: '#787b86', size: 12 },
-                tickformat: '%H:%M:%S',
-                showgrid: true,
-                gridwidth: 1
+                tickfont: { color: '#787b86' },
+                tickformat: '%H:%M:%S'
             },
             yaxis: {
-                title: '',
+                title: 'Price',
+                titlefont: { color: '#787b86' },
                 gridcolor: '#1e222d',
                 linecolor: '#1e222d',
-                tickfont: { color: '#787b86', size: 12 },
-                showgrid: true,
-                gridwidth: 1,
-                tickformat: '.2f'
+                tickfont: { color: '#787b86' },
+                domain: [0.3, 1]
             },
-            font: { color: '#787b86' }
+            yaxis2: {
+                title: 'Volume',
+                titlefont: { color: '#787b86' },
+                gridcolor: '#1e222d',
+                linecolor: '#1e222d',
+                tickfont: { color: '#787b86' },
+                domain: [0, 0.2]
+            }
         };
 
-        Plotly.newPlot('chart', [candleData], layout, {
+        Plotly.newPlot('chart', [candleData, volumeData], layout, {
             responsive: true,
             displayModeBar: false
         });
 
-        function updatePriceInfo(data) {
-            const priceChange = data.close - data.open;
-            const color = priceChange >= 0 ? '#26a69a' : '#ef5350';
-            document.getElementById('price-details').innerHTML = `
-                <span style="color: ${color}">
-                    O: ${data.open.toFixed(2)} 
-                    H: ${data.high.toFixed(2)} 
-                    L: ${data.low.toFixed(2)} 
-                    C: ${data.close.toFixed(2)}
-                </span>
-                <span style="margin-left: 20px;">Vol: ${data.volume}</span>
-            `;
-        }
-
         ws.onmessage = function(event) {
             try {
                 const data = JSON.parse(event.data);
-                
+
                 if (data.symbol) {
-                    document.getElementById('ticker').textContent = data.symbol;
+                    document.getElementById('symbol').textContent = data.symbol;
                 }
-                
+
                 if (data.candlestick) {
                     const timestamp = new Date(data.candlestick.timestamp);
-                    
+
+                    // Update candlestick data
                     candleData.x.push(timestamp);
                     candleData.open.push(data.candlestick.open);
                     candleData.high.push(data.candlestick.high);
                     candleData.low.push(data.candlestick.low);
                     candleData.close.push(data.candlestick.close);
+
+                    // Update volume data
+                    volumeData.x.push(timestamp);
+                    volumeData.y.push(data.candlestick.volume);
+                    volumeData.marker.color.push(
+                        data.candlestick.close >= data.candlestick.open ? 
+                        'rgba(38, 166, 154, 0.5)' : 'rgba(239, 83, 80, 0.5)'
+                    );
 
                     // Keep last 100 points
                     if (candleData.x.length > 100) {
@@ -199,17 +217,27 @@ class AlpacaStreamHandler:
                         candleData.high.shift();
                         candleData.low.shift();
                         candleData.close.shift();
+                        volumeData.x.shift();
+                        volumeData.y.shift();
+                        volumeData.marker.color.shift();
                     }
 
-                    updatePriceInfo(data.candlestick);
+                    // Update price info
+                    document.getElementById('price').textContent = 
+                        `Price: ${data.candlestick.close.toFixed(2)}`;
+                    document.getElementById('volume').textContent = 
+                        `Volume: ${data.candlestick.volume}`;
 
+                    // Update the chart
                     Plotly.update('chart', 
                         {
-                            x: [candleData.x],
+                            x: [candleData.x, volumeData.x],
                             open: [candleData.open],
                             high: [candleData.high],
                             low: [candleData.low],
-                            close: [candleData.close]
+                            close: [candleData.close],
+                            y: [, volumeData.y],
+                            'marker.color': [, volumeData.marker.color]
                         },
                         {
                             'xaxis.range': [
