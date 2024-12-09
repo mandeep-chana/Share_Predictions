@@ -1,5 +1,6 @@
 import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
+import sys
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -36,7 +37,6 @@ import mibian
 from multiprocessing import Pool, cpu_count
 from functools import partial
 
-
 def parse_date(date_str):
     """Parse a date string in the format YYYY-MM-DD."""
     try:
@@ -45,79 +45,24 @@ def parse_date(date_str):
         raise ValueError(f"Invalid date format: {date_str}. Expected format: YYYY-MM-DD")
 
 def get_date_input(prompt):
+    """Get and validate date input from user"""
     while True:
-        date_str = input(prompt).strip()
-
-        if not date_str:  # If the user presses Enter
-            return None
         try:
+            # Flush the input buffer
+            import sys
+            sys.stdout.flush()
+
+            # Print prompt and immediately flush it
+            print(prompt, end='', flush=True)
+            date_str = input().strip()
+
+            if not date_str:  # If the user presses Enter
+                return None
+
             return parse_date(date_str)  # Assuming parse_date is your date parsing function
+
         except ValueError as e:
             print(f"Invalid date format: {e}. Please use YYYY-MM-DD format.")
-
-class SmaCrossWithRisk(Strategy):
-    n1 = 10  # Short-term SMA
-    n2 = 20  # Long-term SMA
-    risk_per_trade = 0.02  # 2% of total equity
-    stop_loss_atr_multiplier = 2
-    trailing_stop_atr_multiplier = 1.5
-
-    def init(self):
-        # Initialize indicators
-        self.sma1 = self.I(SMA, self.data.Close, self.n1)
-        self.sma2 = self.I(SMA, self.data.Close, self.n2)
-        # Calculate ATR manually using Pandas
-        high = pd.Series(self.data.High)
-        low = pd.Series(self.data.Low)
-        close = pd.Series(self.data.Close)
-        self.atr = self.I(self.calculate_atr, high, low, close)
-
-    def calculate_atr(self, high, low, close, period=14):
-        """Calculate ATR using the classic formula."""
-        tr1 = high - low
-        tr2 = (high - close.shift(1)).abs()
-        tr3 = (low - close.shift(1)).abs()
-        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-        atr = tr.rolling(window=period).mean()
-        return atr
-
-    def next(self):
-        # Calculate position size based on ATR
-        atr = self.atr[-1]
-        position_size = self.calculate_position_size(atr)
-
-        # Check for buy signal
-        if crossover(self.sma1, self.sma2):
-            self.buy(size=position_size)
-            self.stop_loss_price = self.data.Close[-1] - self.stop_loss_atr_multiplier * atr
-            self.trailing_stop_price = self.data.Close[-1] - self.trailing_stop_atr_multiplier * atr
-
-        # Check for sell signal
-        elif crossover(self.sma2, self.sma1):
-            self.sell(size=position_size)
-            self.stop_loss_price = self.data.Close[-1] + self.stop_loss_atr_multiplier * atr
-            self.trailing_stop_price = self.data.Close[-1] + self.trailing_stop_atr_multiplier * atr
-
-        # Update stop-loss and trailing stop for open positions
-        if self.position.is_long:
-            self.trailing_stop_price = max(self.trailing_stop_price,
-                                           self.data.Close[-1] - self.trailing_stop_atr_multiplier * atr)
-            if self.data.Close[-1] < self.stop_loss_price or self.data.Close[-1] < self.trailing_stop_price:
-                self.position.close()
-
-        elif self.position.is_short:
-            self.trailing_stop_price = min(self.trailing_stop_price,
-                                           self.data.Close[-1] + self.trailing_stop_atr_multiplier * atr)
-            if self.data.Close[-1] > self.stop_loss_price or self.data.Close[-1] > self.trailing_stop_price:
-                self.position.close()
-
-    def calculate_position_size(self, atr):
-        """Calculate position size based on risk per trade and ATR."""
-        risk_amount = self.equity * self.risk_per_trade
-        position_size = risk_amount / (atr * self.stop_loss_atr_multiplier)
-        # Ensure position size is a positive whole number of units
-        return max(1, int(position_size))
-
 
 def setup_logging():
     """Set up logging configuration"""
@@ -132,257 +77,47 @@ def setup_logging():
     log_format = '%(asctime)s - %(levelname)s - %(message)s'
     date_format = '%Y-%m-%d %H:%M:%S'
 
-    # Set up rotating file handler (10 MB per file, keep 5 backup files)
+    # Configure root logger
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+
+    # Remove any existing handlers
+    logger.handlers = []
+
+    # Set up file handler
     file_handler = RotatingFileHandler(
         log_file,
         maxBytes=10 * 1024 * 1024,  # 10 MB
         backupCount=5
     )
     file_handler.setFormatter(logging.Formatter(log_format, date_format))
+    logger.addHandler(file_handler)
 
     # Set up console handler
-    console_handler = logging.StreamHandler()
+    console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(logging.Formatter(log_format, date_format))
-
-    # Configure root logger
-    logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
-
-    # Remove any existing handlers to avoid duplication
-    logger.handlers = []
-
-    # Add handlers
-    logger.addHandler(file_handler)
     logger.addHandler(console_handler)
 
+    # Log to file only
     logging.info("Logging setup completed")
 
+def process_ticker(ticker, start_date, end_date):
+    """Process a single ticker - to be used with multiprocessing"""
+    logging.info(f"\n{'=' * 50}")
+    logging.info(f"Processing ticker: {ticker}")
 
-# Call setup_logging at the start of your script
-setup_logging()
-
-
-def perform_lstm_analysis(self):
-    """Perform LSTM-based time series analysis"""
     try:
-        if self.stock_data is None or self.stock_data.empty:
-            logging.warning(f"No data available for LSTM analysis of {self.ticker_symbol}")
-            return None, None
-
-        # Check if we have enough data points
-        data = self.stock_data['Close'].values
-        if len(data) < 120:  # Minimum required length
-            logging.warning(f"Insufficient data points ({len(data)}) for LSTM analysis. Minimum required: 120")
-            return None, None
-
-        logging.info(f"Performing LSTM analysis for {self.ticker_symbol}...")
-
-        # Initialize LSTM predictor
-        lstm_predictor = LSTMPredictor(sequence_length=60)
-
-        try:
-            # Train model and get predictions
-            history, (X_test, y_test) = lstm_predictor.train(data)
-
-            if history is None or X_test is None or y_test is None:
-                logging.error("LSTM training failed")
-                return None, None
-
-            # Make predictions
-            predictions = lstm_predictor.predict(data)
-
-            if predictions is None:
-                logging.error("LSTM prediction failed")
-                return None, None
-
-            # Calculate metrics only if we have valid predictions and test data
-            metrics = {}
-            if len(predictions) >= len(y_test):
-                try:
-                    # Transform predictions to match test data scale
-                    scaled_predictions = lstm_predictor.scaler.transform(predictions[-len(y_test):].reshape(-1, 1))
-                    scaled_y_test = lstm_predictor.scaler.transform(y_test.reshape(-1, 1))
-
-                    mse = mean_squared_error(scaled_y_test, scaled_predictions)
-                    mae = mean_absolute_error(scaled_y_test, scaled_predictions)
-                    rmse = np.sqrt(mse)
-
-                    metrics = {
-                        'MSE': float(mse),
-                        'MAE': float(mae),
-                        'RMSE': float(rmse)
-                    }
-                except Exception as e:
-                    logging.error(f"Error calculating metrics: {str(e)}")
-                    metrics = {
-                        'MSE': None,
-                        'MAE': None,
-                        'RMSE': None
-                    }
-
-            # Create visualization
-            self._create_lstm_plot(predictions, data, metrics)
-
-            return predictions, metrics
-
-        except Exception as e:
-            logging.error(f"Error in LSTM processing: {str(e)}")
-            return None, None
-
+        analyzer = StockAnalyzer(ticker, start_date, end_date)
+        analyzer.analyze_stock()
+        return f"Successfully processed {ticker}"
     except Exception as e:
-        logging.error(f"Error performing LSTM analysis for {self.ticker_symbol}: {str(e)}", exc_info=True)
-        return None, None
+        logging.error(f"Error processing ticker {ticker}: {str(e)}", exc_info=True)
+        return f"Failed to process {ticker}: {str(e)}"
 
-def _create_lstm_plot(self, predictions, actual_data, metrics):
-    """Create and save LSTM analysis visualization"""
-    try:
-        plt.figure(figsize=(15, 8))
-
-        # Plot actual data
-        plt.plot(self.stock_data.index[-len(predictions):],
-                actual_data[-len(predictions):],
-                label='Actual Price',
-                alpha=0.6,
-                color='blue')
-
-        # Plot predictions
-        plt.plot(self.stock_data.index[-len(predictions):],
-                predictions,
-                label='LSTM Prediction',
-                alpha=0.6,
-                color='red')
-
-        plt.title(f'{self.ticker_symbol} LSTM Price Prediction')
-        plt.xlabel('Date')
-        plt.ylabel('Price')
-
-        # Add metrics to plot if available
-        if metrics and all(v is not None for v in metrics.values()):
-            metric_text = f"RMSE: {metrics['RMSE']:.2f}\nMAE: {metrics['MAE']:.2f}"
-            plt.text(0.02, 0.98, metric_text,
-                    transform=plt.gca().transAxes,
-                    verticalalignment='top',
-                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-
-        plt.legend()
-        plt.grid(True, alpha=0.3)
-
-        # Save results
-        lstm_dir = os.path.join(self.output_dir, 'lstm_analysis')
-        os.makedirs(lstm_dir, exist_ok=True)
-
-        # Save plot
-        plot_file = os.path.join(lstm_dir, f'{self.ticker_symbol}_lstm_prediction.png')
-        plt.savefig(plot_file, dpi=300, bbox_inches='tight')
-        plt.close()
-
-        # Save metrics if available
-        if metrics:
-            metrics_file = os.path.join(lstm_dir, f'{self.ticker_symbol}_lstm_metrics.json')
-            with open(metrics_file, 'w') as f:
-                json.dump(metrics, f, indent=4)
-
-        logging.info(f"LSTM analysis completed for {self.ticker_symbol}")
-        logging.info(f"Results saved to: {lstm_dir}")
-
-    except Exception as e:
-        logging.error(f"Error creating LSTM plot: {str(e)}")
-
-class BollingerBandStrategy(Strategy):
-    """Bollinger Band breakout strategy with RSI confirmation"""
-
-    # Define parameters that can be optimized
-    bb_window = 20  # Bollinger Band period
-    bb_std = 2.0  # Number of standard deviations
-    rsi_window = 14  # RSI period
-    rsi_upper = 70  # RSI overbought level
-    rsi_lower = 30  # RSI oversold level
-
-    def init(self):
-        # Calculate Bollinger Bands
-        close = self.data.Close
-        self.sma = self.I(lambda x: pd.Series(x).rolling(self.bb_window).mean(), close)
-        self.std = self.I(lambda x: pd.Series(x).rolling(self.bb_window).std(), close)
-
-        self.upper = self.I(lambda: self.sma + self.bb_std * self.std)
-        self.lower = self.I(lambda: self.sma - self.bb_std * self.std)
-
-        # Calculate RSI
-        self.rsi = self.I(self.calculate_rsi)
-
-        # Store previous values for divergence calculation
-        self.prev_rsi_values = []
-        self.prev_price_values = []
-
-    def calculate_rsi(self):
-        """Calculate RSI"""
-        close = pd.Series(self.data.Close)
-        delta = close.diff()
-
-        gain = (delta.where(delta > 0, 0)).rolling(window=self.rsi_window).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=self.rsi_window).mean()
-
-        rs = gain / loss
-        return 100 - (100 / (1 + rs))
-
-    def check_divergence(self):
-        """Check for RSI divergence patterns"""
-        if len(self.prev_rsi_values) < 2:
-            return None
-
-        # Get last two price and RSI values
-        price_change = self.data.Close[-1] - self.data.Close[-2]
-        rsi_change = self.rsi[-1] - self.rsi[-2]
-
-        # Bearish divergence: Price making higher highs, RSI making lower highs
-        if price_change > 0 and rsi_change < 0 and self.rsi[-1] > self.rsi_upper:
-            return 'bearish'
-
-        # Bullish divergence: Price making lower lows, RSI making higher lows
-        if price_change < 0 and rsi_change > 0 and self.rsi[-1] < self.rsi_lower:
-            return 'bullish'
-
-        return None
-
-    def next(self):
-        # Store values for divergence calculation
-        self.prev_rsi_values.append(self.rsi[-1])
-        self.prev_price_values.append(self.data.Close[-1])
-
-        # Keep only last 10 values
-        if len(self.prev_rsi_values) > 10:
-            self.prev_rsi_values.pop(0)
-            self.prev_price_values.pop(0)
-
-        # Check for Bollinger Band breakout
-        bb_breakout = None
-        if self.data.Close[-1] > self.upper[-1]:
-            bb_breakout = 'up'
-        elif self.data.Close[-1] < self.lower[-1]:
-            bb_breakout = 'down'
-
-        # Check for RSI divergence
-        divergence = self.check_divergence()
-
-        # Trading logic
-        if bb_breakout == 'up' and self.rsi[-1] < self.rsi_upper:
-            # Bullish breakout with RSI confirmation
-            if not self.position.is_long:
-                self.position.close()
-                self.buy()
-
-        elif bb_breakout == 'down' and self.rsi[-1] > self.rsi_lower:
-            # Bearish breakout with RSI confirmation
-            if not self.position.is_short:
-                self.position.close()
-                self.sell()
-
-        # Exit positions on divergence
-        if divergence == 'bearish' and self.position.is_long:
-            self.position.close()
-        elif divergence == 'bullish' and self.position.is_short:
-            self.position.close()
-
+def init_worker():
+    """Initialize worker process"""
+    import signal
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
 
 def optimize_strategy(analyzer, strategy_class, parameter_ranges):
     """Optimize strategy parameters using grid search"""
@@ -434,293 +169,6 @@ def optimize_strategy(analyzer, strategy_class, parameter_ranges):
     except Exception as e:
         logging.error(f"Error in strategy optimization: {str(e)}")
         return None, None
-
-
-def perform_backtest(self):
-    """Perform backtesting on the stock data using multiple strategies."""
-    if self.stock_data is None or self.stock_data.empty:
-        logging.warning(f"No data available for backtesting of {self.ticker_symbol}")
-        return None
-
-    logging.info(f"Starting backtest for {self.ticker_symbol}")
-
-    try:
-        # Create strategies directory
-        strategies_dir = os.path.join(self.output_dir, 'strategies')
-        os.makedirs(strategies_dir, exist_ok=True)
-
-        # Test both strategies
-        strategies = {
-            'SMA_Cross': SmaCrossWithRisk,
-            'Bollinger_RSI': BollingerBandStrategy
-        }
-
-        results = {}
-
-        for strategy_name, strategy_class in strategies.items():
-            try:
-                # Run basic backtest
-                bt = Backtest(self.stock_data, strategy_class, cash=10000, commission=.002)
-                stats = bt.run()
-
-                # Extract results and convert to native Python types
-                strategy_results = {
-                    'Return [%]': stats['Return [%]'],
-                    'Sharpe Ratio': stats['Sharpe Ratio'],
-                    'Max. Drawdown [%]': stats['Max. Drawdown [%]'],
-                    'Win Rate [%]': stats['Win Rate [%]'],
-                    'Profit Factor': stats.get('Profit Factor', 0),
-                    '# Trades': stats['# Trades']
-                }
-
-                results[strategy_name] = strategy_results
-
-                # Save individual strategy results
-                strategy_file = os.path.join(strategies_dir, f'{strategy_name}_results.json')
-                with open(strategy_file, 'w') as f:
-                    json.dump(strategy_results, f, indent=4)
-
-                # Create and save strategy performance plot
-                self._create_strategy_plot(bt, stats, strategies_dir, strategy_name)
-
-            except Exception as e:
-                logging.error(f"Error testing strategy {strategy_name}: {str(e)}")
-                continue
-
-        # Optimize Bollinger Band strategy
-        bb_params = {
-            'bb_window': range(10, 31, 5),
-            'bb_std': [1.5, 2.0, 2.5],
-            'rsi_window': range(10, 21, 5),
-            'rsi_upper': range(65, 81, 5),
-            'rsi_lower': range(20, 36, 5)
-        }
-
-        best_params, optimization_results = optimize_strategy(
-            self,
-            BollingerBandStrategy,
-            bb_params
-        )
-
-        if best_params and optimization_results is not None:
-            # Save optimization results
-            opt_results_path = os.path.join(strategies_dir, 'optimization_results.csv')
-            optimization_results.to_csv(opt_results_path)
-
-            # Create and test optimized strategy
-            OptimizedStrategy = type('OptimizedStrategy', (BollingerBandStrategy,), best_params)
-            bt = Backtest(self.stock_data, OptimizedStrategy, cash=10000, commission=.002)
-            stats = bt.run()
-
-            # Save optimized strategy results
-            optimized_results = {
-                'parameters': best_params,
-                'performance': {
-                    'Return [%]': stats['Return [%]'],
-                    'Sharpe Ratio': stats['Sharpe Ratio'],
-                    'Max. Drawdown [%]': stats['Max. Drawdown [%]'],
-                    'Win Rate [%]': stats['Win Rate [%]'],
-                    'Profit Factor': stats.get('Profit Factor', 0),
-                    '# Trades': stats['# Trades']
-                }
-            }
-
-            opt_stats_path = os.path.join(strategies_dir, 'optimized_strategy_results.json')
-            with open(opt_stats_path, 'w') as f:
-                json.dump(optimized_results, f, indent=4)
-
-            # Create and save optimized strategy plot
-            self._create_strategy_plot(bt, stats, strategies_dir, 'Optimized_Strategy')
-
-        # Save comparison of all strategies
-        comparison_file = os.path.join(strategies_dir, 'strategy_comparison.json')
-        with open(comparison_file, 'w') as f:
-            json.dump(results, f, indent=4)
-
-        return results
-
-    except Exception as e:
-        logging.error(f"Error in backtesting: {str(e)}")
-        return None
-class LSTMPredictor:
-    def __init__(self, sequence_length=60):
-        """Initialize LSTM predictor with given sequence length"""
-        self.sequence_length = sequence_length
-        self.scaler = MinMaxScaler(feature_range=(0, 1))
-        self.model = None
-
-        # Suppress TensorFlow warnings
-        tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
-        os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
-
-    # Add the new methods here, after __init__ and before other existing methods
-    def parallel_prepare_sequences(self, data_chunk, sequence_length):
-        """Prepare sequences for LSTM in parallel"""
-        try:
-            X, y = [], []
-            for i in range(len(data_chunk) - sequence_length):
-                X.append(data_chunk[i:(i + sequence_length)])
-                y.append(data_chunk[i + sequence_length])
-            return np.array(X), np.array(y)
-        except Exception as e:
-            logging.error(f"Error preparing sequences: {str(e)}")
-            return None, None
-
-    def prepare_data_for_lstm(self, data, sequence_length=60):
-        """Parallel implementation of data preparation for LSTM"""
-        try:
-            # Split data into chunks
-            num_chunks = cpu_count()
-            chunk_size = len(data) // num_chunks
-            chunks = [data[i:i + chunk_size + sequence_length] for i in range(0, len(data), chunk_size)]
-
-            # Prepare sequences in parallel
-            with Pool(processes=cpu_count()) as pool:
-                results = pool.map(partial(self.parallel_prepare_sequences, sequence_length=sequence_length), chunks)
-
-            # Combine results
-            X = np.concatenate([r[0] for r in results if r[0] is not None])
-            y = np.concatenate([r[1] for r in results if r[1] is not None])
-
-            return X, y
-
-        except Exception as e:
-            logging.error(f"Error in parallel data preparation: {str(e)}")
-            return None, None
-
-    def create_sequences(self, data):
-        """Create sequences for LSTM input"""
-        try:
-            X, y = [], []
-            data = np.array(data)
-
-            if len(data) <= self.sequence_length:
-                raise ValueError(f"Data length ({len(data)}) is insufficient for sequence length ({self.sequence_length})")
-
-            for i in range(len(data) - self.sequence_length):
-                X.append(data[i:(i + self.sequence_length)])
-                y.append(data[i + self.sequence_length])
-            return np.array(X), np.array(y)
-        except Exception as e:
-            logging.error(f"Error creating sequences: {str(e)}")
-            return None, None
-
-    def prepare_data(self, data):
-        """Prepare data for LSTM model"""
-        try:
-            # Validate input data length
-            if len(data) < self.sequence_length * 2:
-                raise ValueError(f"Insufficient data points: {len(data)}. Need at least {self.sequence_length * 2} points.")
-
-            # Ensure data is numpy array and reshape
-            data = np.array(data).reshape(-1, 1)
-
-            # Scale the data
-            scaled_data = self.scaler.fit_transform(data)
-
-            # Create sequences
-            X, y = self.create_sequences(scaled_data)
-            if X is None or y is None:
-                raise ValueError("Failed to create sequences")
-
-            # Reshape X to (samples, time steps, features)
-            X = X.reshape((X.shape[0], X.shape[1], 1))
-
-            # Split data
-            train_size = int(len(X) * 0.8)
-            X_train = X[:train_size]
-            X_test = X[train_size:]
-            y_train = y[:train_size]
-            y_test = y[train_size:]
-
-            return X_train, X_test, y_train, y_test
-
-        except Exception as e:
-            logging.error(f"Error preparing LSTM data: {str(e)}")
-            return None, None, None, None
-
-    def train(self, data):
-        """Train LSTM model"""
-        try:
-            # Prepare data
-            X_train, X_test, y_train, y_test = self.prepare_data(data)
-
-            if X_train is None or y_train is None:
-                raise ValueError("Data preparation failed")
-
-            # Build model
-            self.model = Sequential([
-                LSTM(units=50, activation='relu', input_shape=(self.sequence_length, 1),
-                     return_sequences=True),
-                Dropout(0.2),
-                LSTM(units=50, activation='relu', return_sequences=False),
-                Dropout(0.2),
-                Dense(units=25, activation='relu'),
-                Dense(units=1)
-            ])
-
-            # Compile model
-            optimizer = Adam(learning_rate=0.001)
-            self.model.compile(optimizer=optimizer, loss='huber')
-
-            # Early stopping callback
-            early_stopping = tf.keras.callbacks.EarlyStopping(
-                monitor='val_loss',
-                patience=10,
-                restore_best_weights=True
-            )
-
-            # Reduce learning rate callback
-            reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(
-                monitor='val_loss',
-                factor=0.2,
-                patience=5,
-                min_lr=0.0001
-            )
-
-            # Train model
-            history = self.model.fit(
-                X_train, y_train,
-                epochs=50,
-                batch_size=32,
-                validation_data=(X_test, y_test),
-                callbacks=[early_stopping, reduce_lr],
-                verbose=1,
-                shuffle=False
-            )
-
-            return history, (X_test, y_test)
-
-        except Exception as e:
-            logging.error(f"Error in LSTM training: {str(e)}")
-            return None, (None, None)
-
-    def predict(self, data):
-        """Make predictions using trained model"""
-        try:
-            if self.model is None:
-                raise ValueError("Model has not been trained yet")
-
-            # Prepare data for prediction
-            data = np.array(data).reshape(-1, 1)
-            scaled_data = self.scaler.transform(data)
-
-            # Create sequences
-            X, _ = self.create_sequences(scaled_data)
-            if X is None:
-                raise ValueError("Failed to create sequences for prediction")
-
-            X = X.reshape((X.shape[0], X.shape[1], 1))
-
-            # Make predictions
-            scaled_predictions = self.model.predict(X, verbose=0)
-            predictions = self.scaler.inverse_transform(scaled_predictions)
-
-            return predictions
-
-        except Exception as e:
-            logging.error(f"Error in LSTM prediction: {str(e)}")
-            return None
 
 class StockAnalyzer:
     # Class-level constants
@@ -1099,6 +547,261 @@ class StockAnalyzer:
             logging.error(f"Error performing technical analysis for {self.ticker_symbol}: {str(e)}", exc_info=True)
             return None, None
 
+    def perform_lstm_analysis(self):
+        """Perform LSTM-based time series analysis"""
+        try:
+            if self.stock_data is None or self.stock_data.empty:
+                logging.warning(f"No data available for LSTM analysis of {self.ticker_symbol}")
+                return None
+
+            logging.info(f"Performing LSTM analysis for {self.ticker_symbol}...")
+
+            # Prepare data
+            data = self.stock_data['Close'].values
+
+            # Initialize and train LSTM model
+            lstm_predictor = LSTMPredictor(sequence_length=60)
+            history, (X_test, y_test) = lstm_predictor.train(data)
+
+            # Make predictions
+            predictions = lstm_predictor.predict(data)
+
+            # Calculate metrics
+            mse = mean_squared_error(y_test, lstm_predictor.scaler.transform(predictions[-len(y_test):]))
+            mae = mean_absolute_error(y_test, lstm_predictor.scaler.transform(predictions[-len(y_test):]))
+
+            # Create visualization
+            plt.figure(figsize=(15, 8))
+            plt.plot(self.stock_data.index[-len(predictions):], data[-len(predictions):],
+                     label='Actual Price', alpha=0.6)
+            plt.plot(self.stock_data.index[-len(predictions):], predictions,
+                     label='LSTM Prediction', alpha=0.6)
+            plt.title(f'{self.ticker_symbol} LSTM Price Prediction')
+            plt.xlabel('Date')
+            plt.ylabel('Price')
+            plt.legend()
+
+            # Save results
+            lstm_dir = os.path.join(self.output_dir, 'lstm_analysis')
+            os.makedirs(lstm_dir, exist_ok=True)
+
+            # Save plot
+            plot_file = os.path.join(lstm_dir, f'{self.ticker_symbol}_lstm_prediction.png')
+            plt.savefig(plot_file, dpi=300, bbox_inches='tight')
+            plt.close()
+
+            # Save metrics
+            metrics = {
+                'MSE': float(mse),
+                'MAE': float(mae),
+                'RMSE': float(np.sqrt(mse))
+            }
+
+            metrics_file = os.path.join(lstm_dir, f'{self.ticker_symbol}_lstm_metrics.json')
+            with open(metrics_file, 'w') as f:
+                json.dump(metrics, f, indent=4)
+
+            logging.info(f"LSTM analysis completed for {self.ticker_symbol}")
+            logging.info(f"Results saved to: {lstm_dir}")
+
+            return predictions, metrics
+
+        except Exception as e:
+            logging.error(f"Error performing LSTM analysis for {self.ticker_symbol}: {str(e)}", exc_info=True)
+            return None
+
+    def analyze_candlestick_patterns(self):
+        """Analyze candlestick patterns in the stock data"""
+        try:
+            if self.stock_data is None or self.stock_data.empty:
+                logging.warning(f"No data available for candlestick analysis of {self.ticker_symbol}")
+                return None
+
+            patterns = pd.DataFrame(index=self.stock_data.index)
+
+            # Analyze each candle
+            for i in range(len(self.stock_data)):
+                current = self.stock_data.iloc[i]
+
+                # Single candle patterns
+                patterns.loc[current.name, 'Doji'] = CandlestickPatterns.identify_doji(
+                    current['Open'], current['High'], current['Low'], current['Close']
+                )
+
+                patterns.loc[current.name, 'Hammer'] = CandlestickPatterns.identify_hammer(
+                    current['Open'], current['High'], current['Low'], current['Close']
+                )
+
+                patterns.loc[current.name, 'Hanging_Man'] = CandlestickPatterns.identify_hanging_man(
+                    current['Open'], current['High'], current['Low'], current['Close']
+                )
+
+                # Patterns requiring previous candle
+                if i > 0:
+                    previous = self.stock_data.iloc[i - 1]
+                    patterns.loc[current.name, 'Engulfing'] = CandlestickPatterns.identify_engulfing(
+                        current, previous
+                    )
+
+                    # Patterns requiring 3 candles
+                if i >= 2:
+                    three_candles = self.stock_data.iloc[i - 2:i + 1]
+                    patterns.loc[current.name, 'Abandoned_Baby'] = CandlestickPatterns.identify_abandoned_baby(
+                        three_candles
+                    )
+
+                    # Save patterns to file
+            patterns_file = os.path.join(self.output_dir, f'{self.ticker_symbol}_candlestick_patterns.csv')
+            patterns.to_csv(patterns_file)
+
+            # Create visualization
+            self._create_candlestick_plot(patterns)
+
+            return patterns
+
+        except Exception as e:
+            logging.error(f"Error analyzing candlestick patterns: {str(e)}")
+            return None
+
+    def _create_candlestick_plot(self, patterns):
+        """Create interactive candlestick pattern visualization using Plotly"""
+        try:
+            import plotly.graph_objects as go
+            from plotly.subplots import make_subplots
+
+            # Prepare the data
+            df = self.stock_data.copy()
+
+            # Create figure with secondary y-axis
+            fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                                vertical_spacing=0.03,
+                                row_heights=[0.7, 0.3])
+
+            # Add candlestick chart
+            fig.add_trace(go.Candlestick(
+                x=df.index,
+                open=df['Open'],
+                high=df['High'],
+                low=df['Low'],
+                close=df['Close'],
+                name='OHLC'
+            ), row=1, col=1)
+
+            # Add volume bar chart
+            fig.add_trace(go.Bar(
+                x=df.index,
+                y=df['Volume'],
+                name='Volume',
+                marker_color='rgba(100,100,100,0.5)'
+            ), row=2, col=1)
+
+            # Add pattern markers
+            for idx, row in patterns.iterrows():
+                marker_text = []
+                if row['Doji']:
+                    marker_text.append('Doji')
+                if row['Hammer']:
+                    marker_text.append('Hammer')
+                if row['Hanging_Man']:
+                    marker_text.append('Hanging Man')
+                if row['Engulfing'] == 'bullish':
+                    marker_text.append('Bullish Engulfing')
+                if row['Engulfing'] == 'bearish':
+                    marker_text.append('Bearish Engulfing')
+                if row['Abandoned_Baby']:
+                    marker_text.append(f'Abandoned Baby ({row["Abandoned_Baby"]})')
+
+                if marker_text:
+                    fig.add_trace(go.Scatter(
+                        x=[idx],
+                        y=[df.loc[idx, 'High']],
+                        mode='markers+text',
+                        name=', '.join(marker_text),
+                        text=marker_text,
+                        textposition='top center',
+                        marker=dict(
+                            symbol='triangle-down',
+                            size=15,
+                            color='red' if 'bearish' in str(marker_text).lower() else 'green'
+                        ),
+                        showlegend=True
+                    ), row=1, col=1)
+
+                    # Update layout
+            fig.update_layout(
+                title=f'{self.ticker_symbol} Candlestick Patterns',
+                yaxis_title='Price',
+                yaxis2_title='Volume',
+                xaxis_rangeslider_visible=False,
+                height=800,
+                template='plotly_white',
+                hovermode='x unified',
+                legend=dict(
+                    yanchor="top",
+                    y=0.99,
+                    xanchor="left",
+                    x=0.01
+                )
+            )
+
+            # Update y-axes labels
+            fig.update_yaxes(title_text="Price", row=1, col=1)
+            fig.update_yaxes(title_text="Volume", row=2, col=1)
+
+            # Add buttons for zoom levels
+            fig.update_layout(
+                updatemenus=[
+                    dict(
+                        type="buttons",
+                        direction="right",
+                        x=0.1,
+                        y=1.1,
+                        showactive=True,
+                        buttons=list([
+                            dict(
+                                label="1m",
+                                method="relayout",
+                                args=[{"xaxis.range": [df.index[-20], df.index[-1]]}]
+                            ),
+                            dict(
+                                label="3m",
+                                method="relayout",
+                                args=[{"xaxis.range": [df.index[-60], df.index[-1]]}]
+                            ),
+                            dict(
+                                label="6m",
+                                method="relayout",
+                                args=[{"xaxis.range": [df.index[-120], df.index[-1]]}]
+                            ),
+                            dict(
+                                label="YTD",
+                                method="relayout",
+                                args=[{"xaxis.range": [df.index[0], df.index[-1]]}]
+                            ),
+                            dict(
+                                label="1y",
+                                method="relayout",
+                                args=[{"xaxis.range": [df.index[-252], df.index[-1]]}]
+                            ),
+                            dict(
+                                label="All",
+                                method="relayout",
+                                args=[{"xaxis.range": [df.index[0], df.index[-1]]}]
+                            )
+                        ]),
+                    )
+                ]
+            )
+
+            # Save as HTML file
+            plot_file = os.path.join(self.output_dir, f'{self.ticker_symbol}_candlestick_patterns.html')
+            fig.write_html(plot_file, include_plotlyjs=True, full_html=True)
+
+            logging.info(f"Interactive candlestick pattern plot saved to: {plot_file}")
+
+        except Exception as e:
+            logging.error(f"Error creating candlestick pattern plot: {str(e)}")
+
     def analyze_stock(self):
         """Main analysis pipeline"""
         try:
@@ -1139,6 +842,8 @@ class StockAnalyzer:
                 analysis_file = os.path.join(self.output_dir, f'{self.ticker_symbol}_analysis.json')
                 with open(analysis_file, 'w') as f:
                     json.dump(analysis_results, f, indent=4)
+
+                logging.info(f"Analysis results saved to {analysis_file}")
 
                 # Explicitly call trading bot
                 self.start_trading_bot(analysis_file)
@@ -1573,95 +1278,6 @@ class StockAnalyzer:
         except Exception as e:
             logging.error(f"Error creating backtest plot: {str(e)}", exc_info=True)
 
-    def analyze_stock(self):
-        """Main analysis pipeline"""
-        try:
-            print(f"\nStarting analysis for {self.ticker_symbol}...")
-
-            # Data Collection
-            self.fetch_company_info()
-            self.fetch_financial_news()
-            self.fetch_stock_data()
-
-            # Analysis
-            if self.stock_data is not None and not self.stock_data.empty:
-                # Perform all analyses
-                results, summary = self.perform_technical_analysis()
-                lstm_predictions, lstm_metrics = self.perform_lstm_analysis()
-                forecast = self.forecast_prices()
-                backtest_results = self.perform_backtest()
-
-                # Generate trading signals
-                self.generate_buy_sell_signals(results)
-
-                # Prepare analysis results for trading bot
-                analysis_results = {
-                    'ticker': self.ticker_symbol,
-                    'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                    'technical_indicators': {
-                        'rsi': float(results['RSI'].iloc[-1]) if 'RSI' in results else None,
-                        'macd': float(results['MACD'].iloc[-1]) if 'MACD' in results else None,
-                        'bb_upper': float(results['BB_High'].iloc[-1]) if 'BB_High' in results else None,
-                        'bb_lower': float(results['BB_Low'].iloc[-1]) if 'BB_Low' in results else None
-                    },
-                    'lstm_prediction': float(lstm_predictions[-1]) if lstm_predictions is not None else None,
-                    'forecast': float(forecast['yhat'].iloc[-1]) if forecast is not None else None,
-                    'backtest_results': backtest_results
-                }
-
-                # Save analysis results
-                analysis_file = os.path.join(self.output_dir, f'{self.ticker_symbol}_analysis.json')
-                with open(analysis_file, 'w') as f:
-                    json.dump(analysis_results, f, indent=4)
-
-                logging.info(f"Analysis results saved to {analysis_file}")
-
-                # Explicitly call trading bot
-                self.start_trading_bot(analysis_file)
-
-            else:
-                logging.warning(f"Cannot proceed with analysis for {self.ticker_symbol} due to missing stock data.")
-
-        except Exception as e:
-            logging.error(f"Error analyzing stock {self.ticker_symbol}: {str(e)}")
-    def _print_market_analysis(self, analysis):
-        """Print a summary of the market condition analysis"""
-        print("\nMarket Analysis Summary:")
-
-        if 'economic' in analysis:
-            print("\nEconomic Indicators:")
-            print(f"GDP Trend: {analysis['economic']['gdp_trend']:.2%}")
-            print(f"Unemployment Rate: {analysis['economic']['unemployment_rate']:.1f}%")
-            print(f"Inflation Rate: {analysis['economic']['inflation_rate']:.1f}%")
-            print(f"Interest Rate: {analysis['economic']['interest_rate']:.2f}%")
-            print(f"Yield Curve Spread: {analysis['economic']['yield_curve']:.2f}")
-            print(f"VIX Index: {analysis['economic']['market_volatility']:.2f}")
-
-        if 'options' in analysis:
-            print("\nOptions Market Indicators:")
-            print(f"Put-Call Ratio: {analysis['options']['put_call_ratio']:.2f}")
-            print(f"Average Implied Volatility: {analysis['options']['avg_implied_volatility']:.1f}%")
-            print(f"Total Open Interest: {analysis['options']['total_open_interest']:,}")
-            print("\nMost Active Strike Prices:")
-            for strike, volume in analysis['options']['most_active_strikes'].items():
-                print(f"${strike}: {volume:,} contracts")
-
-    def _print_company_summary(self):
-        """Print a summary of the fetched company information."""
-        try:
-            yahoo_info = self.company_info.get('yahoo_api', {})
-            print("\nCompany Summary:")
-            print(f"Name: {yahoo_info.get('name', 'N/A')}")
-            print(f"Industry: {yahoo_info.get('industry', 'N/A')}")
-            print(f"Sector: {yahoo_info.get('sector', 'N/A')}")
-            print(f"Country: {yahoo_info.get('country', 'N/A')}")
-            print(f"Employees: {yahoo_info.get('employees', 'N/A')}")
-            print(f"Website: {yahoo_info.get('website', 'N/A')}")
-            print(f"Market Cap: {yahoo_info.get('market_cap', 'N/A')}")
-            print(f"Currency: {yahoo_info.get('currency', 'N/A')}")
-        except Exception as e:
-            print(f"Error printing company summary for {self.ticker_symbol}: {str(e)}")
-
     def forecast_prices(self):
         """Forecast future stock prices using Prophet."""
         try:
@@ -1788,69 +1404,6 @@ class StockAnalyzer:
         except Exception as e:
             logging.error(f"Error creating components plot: {str(e)}", exc_info=True)
 
-    def prepare_data_for_prophet(self):
-        """Prepare data for Prophet model"""
-        if self.stock_data is None or self.stock_data.empty:
-            logging.warning(f"No valid stock data for {self.ticker_symbol}")
-            return None
-
-        try:
-            df = self.stock_data.reset_index()
-            prophet_df = pd.DataFrame()
-
-            # Convert dates to numpy array explicitly
-            prophet_df['ds'] = pd.to_datetime(df['Date'])
-            prophet_df['y'] = df['Close'].values
-
-            return prophet_df.dropna()
-
-        except Exception as e:
-            logging.error(f"Error preparing data for Prophet: {str(e)}", exc_info=True)
-            return None
-
-    def _save_forecast_results(self, forecast, model):
-        """Save forecast results and create visualizations"""
-        try:
-            # Create forecast directory if it doesn't exist
-            forecast_dir = os.path.join(self.output_dir, 'forecast_plots')
-            os.makedirs(forecast_dir, exist_ok=True)
-
-            # Save forecast data
-            forecast_file = os.path.join(forecast_dir, f'{self.ticker_symbol}_forecast.csv')
-            forecast.to_csv(forecast_file, index=False)
-
-            # Create and save plots
-            fig = model.plot(forecast, uncertainty=True)
-            plt.title(f'{self.ticker_symbol} Price Forecast')
-
-            # Convert datetime values explicitly
-            forecast['ds'] = pd.to_datetime(forecast['ds']).dt.to_pydatetime()
-
-            # Add actual prices to the plot
-            if self.stock_data is not None:
-                actual_dates = pd.to_datetime(self.stock_data.index).to_pydatetime()
-                plt.plot(actual_dates, self.stock_data['Close'],
-                         'k.', alpha=0.5, label='Actual Prices')
-
-            plt.legend()
-
-            # Save the plot
-            plot_file = os.path.join(forecast_dir, f'{self.ticker_symbol}_forecast_plot.png')
-            plt.savefig(plot_file, dpi=300, bbox_inches='tight')
-            plt.close()
-
-            # Create components plot
-            fig = model.plot_components(forecast)
-            components_file = os.path.join(forecast_dir, f'{self.ticker_symbol}_forecast_components.png')
-            plt.savefig(components_file, dpi=300, bbox_inches='tight')
-            plt.close()
-
-            logging.info(f"Forecast saved to: {forecast_file}")
-            logging.info(f"Forecast plots saved to: {plot_file} and {components_file}")
-
-        except Exception as e:
-            logging.error(f"Error saving forecast results: {str(e)}", exc_info=True)
-
     def print_forecast_summary(self, forecast):
         """Print a summary of the forecast results."""
         try:
@@ -1889,127 +1442,6 @@ class StockAnalyzer:
                 std = data[column].std()
                 data[column] = data[column].clip(mean - n_std * std, mean + n_std * std)
         return data
-
-    def perform_lstm_analysis(self):
-        """Perform LSTM-based time series analysis"""
-        try:
-            if self.stock_data is None or self.stock_data.empty:
-                logging.warning(f"No data available for LSTM analysis of {self.ticker_symbol}")
-                return None
-
-            logging.info(f"Performing LSTM analysis for {self.ticker_symbol}...")
-
-            # Prepare data
-            data = self.stock_data['Close'].values
-
-            # Initialize and train LSTM model
-            lstm_predictor = LSTMPredictor(sequence_length=60)
-            history, (X_test, y_test) = lstm_predictor.train(data)
-
-            # Make predictions
-            predictions = lstm_predictor.predict(data)
-
-            # Calculate metrics
-            mse = mean_squared_error(y_test, lstm_predictor.scaler.transform(predictions[-len(y_test):]))
-            mae = mean_absolute_error(y_test, lstm_predictor.scaler.transform(predictions[-len(y_test):]))
-
-            # Create visualization
-            plt.figure(figsize=(15, 8))
-            plt.plot(self.stock_data.index[-len(predictions):], data[-len(predictions):],
-                     label='Actual Price', alpha=0.6)
-            plt.plot(self.stock_data.index[-len(predictions):], predictions,
-                     label='LSTM Prediction', alpha=0.6)
-            plt.title(f'{self.ticker_symbol} LSTM Price Prediction')
-            plt.xlabel('Date')
-            plt.ylabel('Price')
-            plt.legend()
-
-            # Save results
-            lstm_dir = os.path.join(self.output_dir, 'lstm_analysis')
-            os.makedirs(lstm_dir, exist_ok=True)
-
-            # Save plot
-            plot_file = os.path.join(lstm_dir, f'{self.ticker_symbol}_lstm_prediction.png')
-            plt.savefig(plot_file, dpi=300, bbox_inches='tight')
-            plt.close()
-
-            # Save metrics
-            metrics = {
-                'MSE': float(mse),
-                'MAE': float(mae),
-                'RMSE': float(np.sqrt(mse))
-            }
-
-            metrics_file = os.path.join(lstm_dir, f'{self.ticker_symbol}_lstm_metrics.json')
-            with open(metrics_file, 'w') as f:
-                json.dump(metrics, f, indent=4)
-
-            logging.info(f"LSTM analysis completed for {self.ticker_symbol}")
-            logging.info(f"Results saved to: {lstm_dir}")
-
-            return predictions, metrics
-
-        except Exception as e:
-            logging.error(f"Error performing LSTM analysis for {self.ticker_symbol}: {str(e)}", exc_info=True)
-            return None
-
-    def fetch_economic_indicators(self):
-        """Fetch relevant economic indicators from alternative sources"""
-        try:
-            # Use Yahoo Finance to get major economic indicators via ETFs/indices
-            indicators = {
-                'SPY': '^GSPC',  # S&P 500
-                'VIX': '^VIX',  # Volatility Index
-                'TNX': '^TNX',  # 10-Year Treasury Yield
-                'DXY': 'DX-Y.NYB',  # US Dollar Index
-                'GLD': 'GC=F',  # Gold Futures
-                'CL': 'CL=F',  # Crude Oil Futures
-            }
-
-            economic_data = pd.DataFrame()
-
-            for indicator_name, symbol in indicators.items():
-                try:
-                    data = yf.download(symbol,
-                                       start=self.start_date,
-                                       end=self.end_date,
-                                       progress=False)['Close']
-                    economic_data[indicator_name] = data
-                except Exception as e:
-                    logging.warning(f"Could not fetch {indicator_name}: {str(e)}")
-
-            # Add derived indicators
-            if not economic_data.empty:
-                # Calculate daily returns
-                economic_data['SPY_Returns'] = economic_data['SPY'].pct_change()
-
-                # Calculate rolling volatility
-                economic_data['Market_Volatility'] = economic_data['SPY_Returns'].rolling(window=20).std() * np.sqrt(
-                    252)
-
-                # Calculate yield curve spread (if available)
-                if 'TNX' in economic_data.columns:
-                    try:
-                        tyx_data = yf.download('^TYX', start=self.start_date, end=self.end_date, progress=False)[
-                            'Close']
-                        # Reindex both series to match dates
-                        common_dates = economic_data.index.intersection(tyx_data.index)
-                        economic_data['TYX'] = tyx_data[common_dates]
-                        economic_data['Yield_Spread'] = economic_data['TYX'] - economic_data['TNX']
-                    except Exception as e:
-                        logging.warning(f"Could not calculate yield spread: {str(e)}")
-
-                # Save economic indicators
-                output_path = os.path.join(self.output_dir,
-                                           f'{self.ticker_symbol}_economic_indicators.csv')
-                economic_data.to_csv(output_path)
-                logging.info(f"Saved economic indicators to {output_path}")
-
-            return economic_data
-
-        except Exception as e:
-            logging.error(f"Error fetching economic indicators: {str(e)}")
-            return None
 
     def analyze_market_conditions(self, economic_data, options_data):
         """Analyze market conditions using economic indicators and options data"""
@@ -2163,84 +1595,6 @@ class StockAnalyzer:
         except Exception as e:
             logging.error(f"Error printing market analysis: {str(e)}")
 
-    def fetch_economic_indicators(self):
-        """Fetch relevant economic indicators from alternative sources"""
-        try:
-            # Use Yahoo Finance to get major economic indicators via ETFs/indices
-            indicators = {
-                'SPY': '^GSPC',  # S&P 500
-                'VIX': '^VIX',  # Volatility Index
-                'TNX': '^TNX',  # 10-Year Treasury Yield
-                'DXY': 'DX-Y.NYB',  # US Dollar Index
-                'GLD': 'GC=F',  # Gold Futures
-                'CL': 'CL=F',  # Crude Oil Futures
-            }
-
-            economic_data = pd.DataFrame()
-
-            # Fetch data for each indicator
-            for indicator_name, symbol in indicators.items():
-                try:
-                    data = yf.download(symbol,
-                                       start=self.start_date,
-                                       end=self.end_date,
-                                       progress=False)['Close']
-                    economic_data[indicator_name] = data
-                except Exception as e:
-                    logging.warning(f"Could not fetch {indicator_name}: {str(e)}")
-
-            # Add derived indicators
-            if not economic_data.empty:
-                # Calculate daily returns
-                economic_data['SPY_Returns'] = economic_data['SPY'].pct_change()
-
-                # Calculate rolling volatility
-                economic_data['Market_Volatility'] = economic_data['SPY_Returns'].rolling(window=20).std() * np.sqrt(
-                    252)
-
-                # Calculate yield curve spread (if available)
-                if 'TNX' in economic_data.columns:
-                    try:
-                        # Fetch 30-year Treasury yield
-                        tyx_data = yf.download('^TYX',
-                                               start=self.start_date,
-                                               end=self.end_date,
-                                               progress=False)['Close']
-
-                        # Ensure indexes match
-                        economic_data = economic_data.loc[~economic_data.index.duplicated(keep='first')]
-                        tyx_data = tyx_data.loc[~tyx_data.index.duplicated(keep='first')]
-
-                        # Add TYX to economic data
-                        economic_data['TYX'] = tyx_data
-
-                        # Calculate spread
-                        economic_data['Yield_Spread'] = economic_data['TYX'] - economic_data['TNX']
-
-                        logging.info("Successfully calculated yield spread")
-                    except Exception as e:
-                        logging.warning(f"Could not calculate yield spread: {str(e)}")
-                        economic_data['Yield_Spread'] = np.nan
-
-                # Remove any remaining NaN values
-                economic_data = economic_data.fillna(method='ffill').fillna(method='bfill')
-
-                # Save economic indicators
-                output_path = os.path.join(self.output_dir,
-                                           f'{self.ticker_symbol}_economic_indicators.csv')
-                economic_data.to_csv(output_path)
-                logging.info(f"Saved economic indicators to {output_path}")
-
-                # Log some basic statistics for verification
-                logging.info(f"Economic data shape: {economic_data.shape}")
-                logging.info(f"Columns: {economic_data.columns.tolist()}")
-
-            return economic_data
-
-        except Exception as e:
-            logging.error(f"Error fetching economic indicators: {str(e)}")
-            return None
-
     def fetch_options_data(self):
         """Fetch options data for the stock"""
         try:
@@ -2336,32 +1690,609 @@ class StockAnalyzer:
         except Exception as e:
             logging.error(f"Error triggering trading bot: {str(e)}")
 
-def process_ticker(ticker, start_date, end_date):
-    """Process a single ticker - to be used with multiprocessing"""
-    logging.info(f"\n{'=' * 50}")
-    logging.info(f"Processing ticker: {ticker}")
+    def _print_company_summary(self):
+        """Print a summary of the fetched company information."""
+        try:
+            yahoo_info = self.company_info.get('yahoo_api', {})
+            print("\nCompany Summary:")
+            print(f"Name: {yahoo_info.get('name', 'N/A')}")
+            print(f"Industry: {yahoo_info.get('industry', 'N/A')}")
+            print(f"Sector: {yahoo_info.get('sector', 'N/A')}")
+            print(f"Country: {yahoo_info.get('country', 'N/A')}")
+            print(f"Employees: {yahoo_info.get('employees', 'N/A')}")
+            print(f"Website: {yahoo_info.get('website', 'N/A')}")
+            print(f"Market Cap: {yahoo_info.get('market_cap', 'N/A')}")
+            print(f"Currency: {yahoo_info.get('currency', 'N/A')}")
+        except Exception as e:
+            print(f"Error printing company summary for {self.ticker_symbol}: {str(e)}")
 
-    try:
-        analyzer = StockAnalyzer(ticker, start_date, end_date)
-        analyzer.analyze_stock()
-        return f"Successfully processed {ticker}"
-    except Exception as e:
-        logging.error(f"Error processing ticker {ticker}: {str(e)}", exc_info=True)
-        return f"Failed to process {ticker}: {str(e)}"
+    def fetch_economic_indicators(self):
+        """Fetch relevant economic indicators from alternative sources"""
+        try:
+            # Use Yahoo Finance to get major economic indicators via ETFs/indices
+            indicators = {
+                'SPY': '^GSPC',  # S&P 500
+                'VIX': '^VIX',  # Volatility Index
+                'TNX': '^TNX',  # 10-Year Treasury Yield
+                'DXY': 'DX-Y.NYB',  # US Dollar Index
+                'GLD': 'GC=F',  # Gold Futures
+                'CL': 'CL=F',  # Crude Oil Futures
+            }
 
-def init_worker():
-    """Initialize worker process"""
-    import signal
-    signal.signal(signal.SIGINT, signal.SIG_IGN)
+            economic_data = pd.DataFrame()
+
+            # Fetch data for each indicator
+            for indicator_name, symbol in indicators.items():
+                try:
+                    data = yf.download(symbol,
+                                       start=self.start_date,
+                                       end=self.end_date,
+                                       progress=False)['Close']
+                    economic_data[indicator_name] = data
+                except Exception as e:
+                    logging.warning(f"Could not fetch {indicator_name}: {str(e)}")
+
+            # Add derived indicators
+            if not economic_data.empty:
+                # Calculate daily returns
+                economic_data['SPY_Returns'] = economic_data['SPY'].pct_change()
+
+                # Calculate rolling volatility
+                economic_data['Market_Volatility'] = economic_data['SPY_Returns'].rolling(window=20).std() * np.sqrt(
+                    252)
+
+                # Calculate yield curve spread (if available)
+                if 'TNX' in economic_data.columns:
+                    try:
+                        # Fetch 30-year Treasury yield
+                        tyx_data = yf.download('^TYX',
+                                               start=self.start_date,
+                                               end=self.end_date,
+                                               progress=False)['Close']
+
+                        # Ensure indexes match
+                        economic_data = economic_data.loc[~economic_data.index.duplicated(keep='first')]
+                        tyx_data = tyx_data.loc[~tyx_data.index.duplicated(keep='first')]
+
+                        # Add TYX to economic data
+                        economic_data['TYX'] = tyx_data
+
+                        # Calculate spread
+                        economic_data['Yield_Spread'] = economic_data['TYX'] - economic_data['TNX']
+
+                        logging.info("Successfully calculated yield spread")
+                    except Exception as e:
+                        logging.warning(f"Could not calculate yield spread: {str(e)}")
+                        economic_data['Yield_Spread'] = np.nan
+
+                # Remove any remaining NaN values
+                economic_data = economic_data.fillna(method='ffill').fillna(method='bfill')
+
+                # Save economic indicators
+                output_path = os.path.join(self.output_dir,
+                                           f'{self.ticker_symbol}_economic_indicators.csv')
+                economic_data.to_csv(output_path)
+                logging.info(f"Saved economic indicators to {output_path}")
+
+                # Log some basic statistics for verification
+                logging.info(f"Economic data shape: {economic_data.shape}")
+                logging.info(f"Columns: {economic_data.columns.tolist()}")
+
+            return economic_data
+
+        except Exception as e:
+            logging.error(f"Error fetching economic indicators: {str(e)}")
+            return None
+
+    def _create_lstm_plot(self, predictions, actual_data, metrics):
+        """Create and save LSTM analysis visualization"""
+        try:
+            plt.figure(figsize=(15, 8))
+
+            # Plot actual data
+            plt.plot(self.stock_data.index[-len(predictions):],
+                     actual_data[-len(predictions):],
+                     label='Actual Price',
+                     alpha=0.6,
+                     color='blue')
+
+            # Plot predictions
+            plt.plot(self.stock_data.index[-len(predictions):],
+                     predictions,
+                     label='LSTM Prediction',
+                     alpha=0.6,
+                     color='red')
+
+            plt.title(f'{self.ticker_symbol} LSTM Price Prediction')
+            plt.xlabel('Date')
+            plt.ylabel('Price')
+
+            # Add metrics to plot if available
+            if metrics and all(v is not None for v in metrics.values()):
+                metric_text = f"RMSE: {metrics['RMSE']:.2f}\nMAE: {metrics['MAE']:.2f}"
+                plt.text(0.02, 0.98, metric_text,
+                         transform=plt.gca().transAxes,
+                         verticalalignment='top',
+                         bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+            plt.legend()
+            plt.grid(True, alpha=0.3)
+
+            # Save results
+            lstm_dir = os.path.join(self.output_dir, 'lstm_analysis')
+            os.makedirs(lstm_dir, exist_ok=True)
+
+            # Save plot
+            plot_file = os.path.join(lstm_dir, f'{self.ticker_symbol}_lstm_prediction.png')
+            plt.savefig(plot_file, dpi=300, bbox_inches='tight')
+            plt.close()
+
+            # Save metrics if available
+            if metrics:
+                metrics_file = os.path.join(lstm_dir, f'{self.ticker_symbol}_lstm_metrics.json')
+                with open(metrics_file, 'w') as f:
+                    json.dump(metrics, f, indent=4)
+
+            logging.info(f"LSTM analysis completed for {self.ticker_symbol}")
+            logging.info(f"Results saved to: {lstm_dir}")
+
+        except Exception as e:
+            logging.error(f"Error creating LSTM plot: {str(e)}")
+
+class LSTMPredictor:
+    def __init__(self, sequence_length=60):
+        """Initialize LSTM predictor with given sequence length"""
+        self.sequence_length = sequence_length
+        self.scaler = MinMaxScaler(feature_range=(0, 1))
+        self.model = None
+
+        # Suppress TensorFlow warnings
+        tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
+        os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
+    # Add the new methods here, after __init__ and before other existing methods
+    def parallel_prepare_sequences(self, data_chunk, sequence_length):
+        """Prepare sequences for LSTM in parallel"""
+        try:
+            X, y = [], []
+            for i in range(len(data_chunk) - sequence_length):
+                X.append(data_chunk[i:(i + sequence_length)])
+                y.append(data_chunk[i + sequence_length])
+            return np.array(X), np.array(y)
+        except Exception as e:
+            logging.error(f"Error preparing sequences: {str(e)}")
+            return None, None
+
+    def prepare_data_for_lstm(self, data, sequence_length=60):
+        """Parallel implementation of data preparation for LSTM"""
+        try:
+            # Split data into chunks
+            num_chunks = cpu_count()
+            chunk_size = len(data) // num_chunks
+            chunks = [data[i:i + chunk_size + sequence_length] for i in range(0, len(data), chunk_size)]
+
+            # Prepare sequences in parallel
+            with Pool(processes=cpu_count()) as pool:
+                results = pool.map(partial(self.parallel_prepare_sequences, sequence_length=sequence_length), chunks)
+
+            # Combine results
+            X = np.concatenate([r[0] for r in results if r[0] is not None])
+            y = np.concatenate([r[1] for r in results if r[1] is not None])
+
+            return X, y
+
+        except Exception as e:
+            logging.error(f"Error in parallel data preparation: {str(e)}")
+            return None, None
+
+    def create_sequences(self, data):
+        """Create sequences for LSTM input"""
+        try:
+            X, y = [], []
+            data = np.array(data)
+
+            if len(data) <= self.sequence_length:
+                raise ValueError(f"Data length ({len(data)}) is insufficient for sequence length ({self.sequence_length})")
+
+            for i in range(len(data) - self.sequence_length):
+                X.append(data[i:(i + self.sequence_length)])
+                y.append(data[i + self.sequence_length])
+            return np.array(X), np.array(y)
+        except Exception as e:
+            logging.error(f"Error creating sequences: {str(e)}")
+            return None, None
+
+    def prepare_data(self, data):
+        """Prepare data for LSTM model"""
+        try:
+            # Validate input data length
+            if len(data) < self.sequence_length * 2:
+                raise ValueError(f"Insufficient data points: {len(data)}. Need at least {self.sequence_length * 2} points.")
+
+            # Ensure data is numpy array and reshape
+            data = np.array(data).reshape(-1, 1)
+
+            # Scale the data
+            scaled_data = self.scaler.fit_transform(data)
+
+            # Create sequences
+            X, y = self.create_sequences(scaled_data)
+            if X is None or y is None:
+                raise ValueError("Failed to create sequences")
+
+            # Reshape X to (samples, time steps, features)
+            X = X.reshape((X.shape[0], X.shape[1], 1))
+
+            # Split data
+            train_size = int(len(X) * 0.8)
+            X_train = X[:train_size]
+            X_test = X[train_size:]
+            y_train = y[:train_size]
+            y_test = y[train_size:]
+
+            return X_train, X_test, y_train, y_test
+
+        except Exception as e:
+            logging.error(f"Error preparing LSTM data: {str(e)}")
+            return None, None, None, None
+
+    def train(self, data):
+        """Train LSTM model"""
+        try:
+            # Prepare data
+            X_train, X_test, y_train, y_test = self.prepare_data(data)
+
+            if X_train is None or y_train is None:
+                raise ValueError("Data preparation failed")
+
+            # Build model
+            self.model = Sequential([
+                LSTM(units=50, activation='relu', input_shape=(self.sequence_length, 1),
+                     return_sequences=True),
+                Dropout(0.2),
+                LSTM(units=50, activation='relu', return_sequences=False),
+                Dropout(0.2),
+                Dense(units=25, activation='relu'),
+                Dense(units=1)
+            ])
+
+            # Compile model
+            optimizer = Adam(learning_rate=0.001)
+            self.model.compile(optimizer=optimizer, loss='huber')
+
+            # Early stopping callback
+            early_stopping = tf.keras.callbacks.EarlyStopping(
+                monitor='val_loss',
+                patience=10,
+                restore_best_weights=True
+            )
+
+            # Reduce learning rate callback
+            reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(
+                monitor='val_loss',
+                factor=0.2,
+                patience=5,
+                min_lr=0.0001
+            )
+
+            # Train model
+            history = self.model.fit(
+                X_train, y_train,
+                epochs=50,
+                batch_size=32,
+                validation_data=(X_test, y_test),
+                callbacks=[early_stopping, reduce_lr],
+                verbose=1,
+                shuffle=False
+            )
+
+            return history, (X_test, y_test)
+
+        except Exception as e:
+            logging.error(f"Error in LSTM training: {str(e)}")
+            return None, (None, None)
+
+    def predict(self, data):
+        """Make predictions using trained model"""
+        try:
+            if self.model is None:
+                raise ValueError("Model has not been trained yet")
+
+            # Prepare data for prediction
+            data = np.array(data).reshape(-1, 1)
+            scaled_data = self.scaler.transform(data)
+
+            # Create sequences
+            X, _ = self.create_sequences(scaled_data)
+            if X is None:
+                raise ValueError("Failed to create sequences for prediction")
+
+            X = X.reshape((X.shape[0], X.shape[1], 1))
+
+            # Make predictions
+            scaled_predictions = self.model.predict(X, verbose=0)
+            predictions = self.scaler.inverse_transform(scaled_predictions)
+
+            return predictions
+
+        except Exception as e:
+            logging.error(f"Error in LSTM prediction: {str(e)}")
+            return None
+
+class CandlestickPatterns:
+    @staticmethod
+    def identify_doji(open_price, high, low, close, tolerance=0.1):
+        """Identify Doji pattern"""
+        body = abs(close - open_price)
+        upper_wick = high - max(open_price, close)
+        lower_wick = min(open_price, close) - low
+
+        # Body should be very small compared to the total range
+        total_range = high - low
+        if total_range == 0:
+            return False
+
+        body_ratio = body / total_range
+        return body_ratio <= tolerance and upper_wick > 0 and lower_wick > 0
+
+    @staticmethod
+    def identify_hammer(open_price, high, low, close, tolerance=0.3):
+        """Identify Hammer pattern"""
+        body = abs(close - open_price)
+        upper_wick = high - max(open_price, close)
+        lower_wick = min(open_price, close) - low
+        total_range = high - low
+
+        if total_range == 0:
+            return False
+
+        # Lower wick should be at least 2 times the body
+        return (lower_wick > 2 * body and
+                upper_wick < body and
+                body / total_range <= tolerance)
+
+    @staticmethod
+    def identify_hanging_man(open_price, high, low, close, tolerance=0.3):
+        """Identify Hanging Man pattern"""
+        body = abs(close - open_price)
+        upper_wick = high - max(open_price, close)
+        lower_wick = min(open_price, close) - low
+        total_range = high - low
+
+        if total_range == 0:
+            return False
+
+        # Similar to hammer but appears at market top
+        return (lower_wick > 2 * body and
+                upper_wick < body and
+                body / total_range <= tolerance)
+
+    @staticmethod
+    def identify_engulfing(current_candle, previous_candle):
+        """Identify Bullish/Bearish Engulfing patterns"""
+        curr_open, curr_close = current_candle['Open'], current_candle['Close']
+        prev_open, prev_close = previous_candle['Open'], previous_candle['Close']
+
+        # Bullish engulfing
+        if (curr_close > curr_open and  # Current candle is bullish
+            curr_close > prev_open and   # Current close higher than previous open
+            curr_open < prev_close):     # Current open lower than previous close
+            return 'bullish'
+
+        # Bearish engulfing
+        elif (curr_close < curr_open and  # Current candle is bearish
+              curr_close < prev_close and  # Current close lower than previous close
+              curr_open > prev_open):      # Current open higher than previous open
+            return 'bearish'
+
+        return None
+
+    @staticmethod
+    def identify_abandoned_baby(candles):
+        """Identify Abandoned Baby pattern (requires 3 candles)"""
+        if len(candles) < 3:
+            return None
+
+        # Check for gaps
+        gap_up = candles.iloc[1]['Low'] > candles.iloc[0]['High']
+        gap_down = candles.iloc[1]['Low'] > candles.iloc[2]['High']
+
+        # Check middle candle is a doji
+        middle_doji = CandlestickPatterns.identify_doji(
+            candles.iloc[1]['Open'],
+            candles.iloc[1]['High'],
+            candles.iloc[1]['Low'],
+            candles.iloc[1]['Close']
+        )
+
+        if middle_doji and gap_up and gap_down:
+            return 'top' if candles.iloc[0]['Close'] > candles.iloc[0]['Open'] else 'bottom'
+
+        return None
+
+class SmaCrossWithRisk(Strategy):
+    n1 = 10  # Short-term SMA
+    n2 = 20  # Long-term SMA
+    risk_per_trade = 0.02  # 2% of total equity
+    stop_loss_atr_multiplier = 2
+    trailing_stop_atr_multiplier = 1.5
+
+    def init(self):
+        # Initialize indicators
+        self.sma1 = self.I(SMA, self.data.Close, self.n1)
+        self.sma2 = self.I(SMA, self.data.Close, self.n2)
+        # Calculate ATR manually using Pandas
+        high = pd.Series(self.data.High)
+        low = pd.Series(self.data.Low)
+        close = pd.Series(self.data.Close)
+        self.atr = self.I(self.calculate_atr, high, low, close)
+
+    def calculate_atr(self, high, low, close, period=14):
+        """Calculate ATR using the classic formula."""
+        tr1 = high - low
+        tr2 = (high - close.shift(1)).abs()
+        tr3 = (low - close.shift(1)).abs()
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        atr = tr.rolling(window=period).mean()
+        return atr
+
+    def next(self):
+        # Calculate position size based on ATR
+        atr = self.atr[-1]
+        position_size = self.calculate_position_size(atr)
+
+        # Check for buy signal
+        if crossover(self.sma1, self.sma2):
+            self.buy(size=position_size)
+            self.stop_loss_price = self.data.Close[-1] - self.stop_loss_atr_multiplier * atr
+            self.trailing_stop_price = self.data.Close[-1] - self.trailing_stop_atr_multiplier * atr
+
+        # Check for sell signal
+        elif crossover(self.sma2, self.sma1):
+            self.sell(size=position_size)
+            self.stop_loss_price = self.data.Close[-1] + self.stop_loss_atr_multiplier * atr
+            self.trailing_stop_price = self.data.Close[-1] + self.trailing_stop_atr_multiplier * atr
+
+        # Update stop-loss and trailing stop for open positions
+        if self.position.is_long:
+            self.trailing_stop_price = max(self.trailing_stop_price,
+                                           self.data.Close[-1] - self.trailing_stop_atr_multiplier * atr)
+            if self.data.Close[-1] < self.stop_loss_price or self.data.Close[-1] < self.trailing_stop_price:
+                self.position.close()
+
+        elif self.position.is_short:
+            self.trailing_stop_price = min(self.trailing_stop_price,
+                                           self.data.Close[-1] + self.trailing_stop_atr_multiplier * atr)
+            if self.data.Close[-1] > self.stop_loss_price or self.data.Close[-1] > self.trailing_stop_price:
+                self.position.close()
+
+    def calculate_position_size(self, atr):
+        """Calculate position size based on risk per trade and ATR."""
+        risk_amount = self.equity * self.risk_per_trade
+        position_size = risk_amount / (atr * self.stop_loss_atr_multiplier)
+        # Ensure position size is a positive whole number of units
+        return max(1, int(position_size))
+
+class BollingerBandStrategy(Strategy):
+    """Bollinger Band breakout strategy with RSI confirmation"""
+
+    # Define parameters that can be optimized
+    bb_window = 20  # Bollinger Band period
+    bb_std = 2.0  # Number of standard deviations
+    rsi_window = 14  # RSI period
+    rsi_upper = 70  # RSI overbought level
+    rsi_lower = 30  # RSI oversold level
+
+    def init(self):
+        # Calculate Bollinger Bands
+        close = self.data.Close
+        self.sma = self.I(lambda x: pd.Series(x).rolling(self.bb_window).mean(), close)
+        self.std = self.I(lambda x: pd.Series(x).rolling(self.bb_window).std(), close)
+
+        self.upper = self.I(lambda: self.sma + self.bb_std * self.std)
+        self.lower = self.I(lambda: self.sma - self.bb_std * self.std)
+
+        # Calculate RSI
+        self.rsi = self.I(self.calculate_rsi)
+
+        # Store previous values for divergence calculation
+        self.prev_rsi_values = []
+        self.prev_price_values = []
+
+    def calculate_rsi(self):
+        """Calculate RSI"""
+        close = pd.Series(self.data.Close)
+        delta = close.diff()
+
+        gain = (delta.where(delta > 0, 0)).rolling(window=self.rsi_window).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=self.rsi_window).mean()
+
+        rs = gain / loss
+        return 100 - (100 / (1 + rs))
+
+    def check_divergence(self):
+        """Check for RSI divergence patterns"""
+        if len(self.prev_rsi_values) < 2:
+            return None
+
+        # Get last two price and RSI values
+        price_change = self.data.Close[-1] - self.data.Close[-2]
+        rsi_change = self.rsi[-1] - self.rsi[-2]
+
+        # Bearish divergence: Price making higher highs, RSI making lower highs
+        if price_change > 0 and rsi_change < 0 and self.rsi[-1] > self.rsi_upper:
+            return 'bearish'
+
+        # Bullish divergence: Price making lower lows, RSI making higher lows
+        if price_change < 0 and rsi_change > 0 and self.rsi[-1] < self.rsi_lower:
+            return 'bullish'
+
+        return None
+
+    def next(self):
+        # Store values for divergence calculation
+        self.prev_rsi_values.append(self.rsi[-1])
+        self.prev_price_values.append(self.data.Close[-1])
+
+        # Keep only last 10 values
+        if len(self.prev_rsi_values) > 10:
+            self.prev_rsi_values.pop(0)
+            self.prev_price_values.pop(0)
+
+        # Check for Bollinger Band breakout
+        bb_breakout = None
+        if self.data.Close[-1] > self.upper[-1]:
+            bb_breakout = 'up'
+        elif self.data.Close[-1] < self.lower[-1]:
+            bb_breakout = 'down'
+
+        # Check for RSI divergence
+        divergence = self.check_divergence()
+
+        # Trading logic
+        if bb_breakout == 'up' and self.rsi[-1] < self.rsi_upper:
+            # Bullish breakout with RSI confirmation
+            if not self.position.is_long:
+                self.position.close()
+                self.buy()
+
+        elif bb_breakout == 'down' and self.rsi[-1] > self.rsi_lower:
+            # Bearish breakout with RSI confirmation
+            if not self.position.is_short:
+                self.position.close()
+                self.sell()
+
+        # Exit positions on divergence
+        if divergence == 'bearish' and self.position.is_long:
+            self.position.close()
+        elif divergence == 'bullish' and self.position.is_short:
+            self.position.close()
 
 def main():
+    # Set up logging before any prompts
     setup_logging()
-    logging.info("Starting stock analysis script")
 
     try:
-        # Get date range from user
+        # Clear the screen or add newlines to separate from any previous output
+        print("\n" * 2)
+
+        print("Please enter the date range for analysis:")
+
+        # Temporarily disable console logging during input
+        console_handler = None
+        for handler in logging.getLogger().handlers:
+            if isinstance(handler, logging.StreamHandler) and handler.stream == sys.stdout:
+                console_handler = handler
+                logging.getLogger().removeHandler(handler)
+                break
+
+        # Get user input
         start_date = get_date_input("Enter start date (YYYY-MM-DD) or press Enter for default: ")
         end_date = get_date_input("Enter end date (YYYY-MM-DD) or press Enter for default: ")
+
+        # Re-enable console logging
+        if console_handler:
+            logging.getLogger().addHandler(console_handler)
 
         # Set default dates if None
         if start_date is None:
@@ -2380,7 +2311,7 @@ def main():
         # Process each ticker
         for ticker in tickers:
             analyzer = StockAnalyzer(ticker, start_date, end_date)
-            analyzer.analyze_stock()  # This will now call trading_bot.py after analysis
+            analyzer.analyze_stock()
 
         logging.info("All analysis completed")
 
