@@ -664,7 +664,7 @@ class StockAnalyzer:
             return None
 
     def _create_candlestick_plot(self, patterns):
-        """Create interactive candlestick pattern visualization using Plotly"""
+        """Create interactive candlestick pattern visualization using Plotly with enhanced zoom/pan"""
         try:
             import plotly.graph_objects as go
             from plotly.subplots import make_subplots
@@ -673,7 +673,8 @@ class StockAnalyzer:
             df = self.stock_data.copy()
 
             # Create figure with secondary y-axis
-            fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
+            fig = make_subplots(rows=2, cols=1,
+                                shared_xaxes=True,
                                 vertical_spacing=0.03,
                                 row_heights=[0.7, 0.3])
 
@@ -695,21 +696,15 @@ class StockAnalyzer:
                 marker_color='rgba(100,100,100,0.5)'
             ), row=2, col=1)
 
-            # Add pattern markers
+            # Add pattern markers (same as before)
             for idx, row in patterns.iterrows():
                 marker_text = []
-                if row['Doji']:
-                    marker_text.append('Doji')
-                if row['Hammer']:
-                    marker_text.append('Hammer')
-                if row['Hanging_Man']:
-                    marker_text.append('Hanging Man')
-                if row['Engulfing'] == 'bullish':
-                    marker_text.append('Bullish Engulfing')
-                if row['Engulfing'] == 'bearish':
-                    marker_text.append('Bearish Engulfing')
-                if row['Abandoned_Baby']:
-                    marker_text.append(f'Abandoned Baby ({row["Abandoned_Baby"]})')
+                if row['Doji']: marker_text.append('Doji')
+                if row['Hammer']: marker_text.append('Hammer')
+                if row['Hanging_Man']: marker_text.append('Hanging Man')
+                if row['Engulfing'] == 'bullish': marker_text.append('Bullish Engulfing')
+                if row['Engulfing'] == 'bearish': marker_text.append('Bearish Engulfing')
+                if row['Abandoned_Baby']: marker_text.append(f'Abandoned Baby ({row["Abandoned_Baby"]})')
 
                 if marker_text:
                     fig.add_trace(go.Scatter(
@@ -727,12 +722,12 @@ class StockAnalyzer:
                         showlegend=True
                     ), row=1, col=1)
 
-                    # Update layout
+                    # Enhanced layout with better zoom/pan controls
             fig.update_layout(
                 title=f'{self.ticker_symbol} Candlestick Patterns',
                 yaxis_title='Price',
                 yaxis2_title='Volume',
-                xaxis_rangeslider_visible=False,
+                xaxis_rangeslider_visible=True,  # Add range slider for easy navigation
                 height=800,
                 template='plotly_white',
                 hovermode='x unified',
@@ -741,66 +736,50 @@ class StockAnalyzer:
                     y=0.99,
                     xanchor="left",
                     x=0.01
+                ),
+                # Add modebar buttons for enhanced interaction
+                modebar=dict(
+                    add=[
+                        'drawline',
+                        'drawopenpath',
+                        'drawclosedpath',
+                        'drawcircle',
+                        'drawrect',
+                        'eraseshape'
+                    ]
+                ),
+                # Configure dragmode for better pan/zoom experience
+                dragmode='zoom',
+                selectdirection='any'
+            )
+
+            # Configure axes for better interaction
+            fig.update_xaxes(
+                rangeslider_visible=True,
+                rangeselector=dict(
+                    buttons=list([
+                        dict(count=1, label="1m", step="month", stepmode="backward"),
+                        dict(count=3, label="3m", step="month", stepmode="backward"),
+                        dict(count=6, label="6m", step="month", stepmode="backward"),
+                        dict(count=1, label="1y", step="year", stepmode="backward"),
+                        dict(step="all", label="All")
+                    ])
                 )
             )
 
-            # Update y-axes labels
-            fig.update_yaxes(title_text="Price", row=1, col=1)
-            fig.update_yaxes(title_text="Volume", row=2, col=1)
+            # Update y-axes labels and interaction
+            fig.update_yaxes(title_text="Price", row=1, col=1, fixedrange=False)
+            fig.update_yaxes(title_text="Volume", row=2, col=1, fixedrange=False)
 
-            # Add buttons for zoom levels
-            fig.update_layout(
-                updatemenus=[
-                    dict(
-                        type="buttons",
-                        direction="right",
-                        x=0.1,
-                        y=1.1,
-                        showactive=True,
-                        buttons=list([
-                            dict(
-                                label="1m",
-                                method="relayout",
-                                args=[{"xaxis.range": [df.index[-20], df.index[-1]]}]
-                            ),
-                            dict(
-                                label="3m",
-                                method="relayout",
-                                args=[{"xaxis.range": [df.index[-60], df.index[-1]]}]
-                            ),
-                            dict(
-                                label="6m",
-                                method="relayout",
-                                args=[{"xaxis.range": [df.index[-120], df.index[-1]]}]
-                            ),
-                            dict(
-                                label="YTD",
-                                method="relayout",
-                                args=[{"xaxis.range": [df.index[0], df.index[-1]]}]
-                            ),
-                            dict(
-                                label="1y",
-                                method="relayout",
-                                args=[{"xaxis.range": [df.index[-252], df.index[-1]]}]
-                            ),
-                            dict(
-                                label="All",
-                                method="relayout",
-                                args=[{"xaxis.range": [df.index[0], df.index[-1]]}]
-                            )
-                        ]),
-                    )
-                ]
-            )
-
-            # Save as HTML file
+            # Save the interactive plot
             plot_file = os.path.join(self.output_dir, f'{self.ticker_symbol}_candlestick_patterns.html')
-            fig.write_html(plot_file, include_plotlyjs=True, full_html=True)
+            fig.write_html(plot_file)
 
-            logging.info(f"Interactive candlestick pattern plot saved to: {plot_file}")
+            return fig
 
         except Exception as e:
-            logging.error(f"Error creating candlestick pattern plot: {str(e)}")
+            logging.error(f"Error creating candlestick plot: {str(e)}")
+            return None
 
     def analyze_stock(self):
         """Main analysis pipeline"""
