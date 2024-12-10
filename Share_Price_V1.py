@@ -4,7 +4,7 @@ import sys
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 from prophet import Prophet
 from bs4 import BeautifulSoup
 import requests
@@ -36,6 +36,48 @@ import mibian
 # MultiProcessing
 from multiprocessing import Pool, cpu_count
 from functools import partial
+import asyncio
+import websocket
+import dash
+from dash import dcc
+from dash import html
+from dash.dependencies import Input, Output
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import yfinance as yf
+import time
+from typing import Optional, Dict, List
+import pandas as pd
+import logging
+import os
+from threading import Thread
+import pytz
+
+
+class RealTimeDataManager:
+    """Manages real-time data updates for multiple stock prices"""
+
+    def __init__(self, update_interval: int = 60):
+        self.is_running: bool = False
+        self.update_interval = update_interval  # seconds
+        self.stock_data: Dict[str, pd.DataFrame] = {}
+
+    def connect(self, symbols: List[str]) -> Dict[str, Optional[dict]]:
+        """Get real-time data for given symbols"""
+        data_dict = {}
+        for symbol in symbols:
+            try:
+                ticker = yf.Ticker(symbol)
+                data = ticker.history(period='1d', interval='1m')
+                if not data.empty:
+                    data_dict[symbol] = data.iloc[-1].to_dict()
+                else:
+                    data_dict[symbol] = None
+            except Exception as e:
+                logging.error(f"Data fetch error for {symbol}: {e}")
+                data_dict[symbol] = None
+        return data_dict
+
 
 def parse_date(date_str):
     """Parse a date string in the format YYYY-MM-DD."""
@@ -170,6 +212,176 @@ def optimize_strategy(analyzer, strategy_class, parameter_ranges):
         logging.error(f"Error in strategy optimization: {str(e)}")
         return None, None
 
+class ChartManager:
+    def __init__(self, output_dir=None):
+        """Initialize ChartManager with output directory"""
+        self.output_dir = output_dir or 'charts'
+        os.makedirs(self.output_dir, exist_ok=True)
+
+    def update_chart(self, ticker, df):
+        """Update chart with new data"""
+        try:
+            if self.output_dir is None:
+                raise ValueError("Output directory not set")
+
+                # Create new chart
+            fig = self.create_candlestick_chart(df, ticker)
+
+            # Convert to HTML
+            chart_div = fig.to_html(full_html=False)
+            html_content = self.generate_html_template(chart_div)
+
+            # Save to file
+            output_file = os.path.join(self.output_dir, f'{ticker}_chart.html')
+            with open(output_file, 'w') as f:
+                f.write(html_content)
+
+            logging.info(f"Updated chart saved to {output_file}")
+            return output_file
+
+        except Exception as e:
+            logging.error(f"Error updating chart: {str(e)}")
+            return None
+
+    def create_candlestick_chart(self, df, ticker):
+        """Create interactive candlestick chart"""
+        fig = go.Figure(data=[
+            go.Candlestick(
+                x=df.index,
+                open=df['Open'],
+                high=df['High'],
+                low=df['Low'],
+                close=df['Close'],
+                name=ticker
+            )
+        ])
+
+        # Apply a clean template with correct button configuration
+        fig.update_layout(
+            template='plotly_white',
+            title=f'{ticker} Stock Price',
+            yaxis_title='Price',
+            xaxis_title='Date',
+            xaxis_rangeslider_visible=False,
+            height=800,
+            updatemenus=[dict(
+                type="buttons",
+                direction="right",
+                x=0.1,
+                y=1.1,
+                showactive=True,
+                buttons=list([
+                    dict(
+                        label="1M",
+                        method="relayout",
+                        args=[{"xaxis.range": [
+                            (df.index[-1] - pd.Timedelta(days=30)).strftime('%Y-%m-%d'),
+                            df.index[-1].strftime('%Y-%m-%d')
+                        ]}]
+                    ),
+                    dict(
+                        label="6M",
+                        method="relayout",
+                        args=[{"xaxis.range": [
+                            (df.index[-1] - pd.Timedelta(days=180)).strftime('%Y-%m-%d'),
+                            df.index[-1].strftime('%Y-%m-%d')
+                        ]}]
+                    ),
+                    dict(
+                        label="1Y",
+                        method="relayout",
+                        args=[{"xaxis.range": [
+                            (df.index[-1] - pd.Timedelta(days=365)).strftime('%Y-%m-%d'),
+                            df.index[-1].strftime('%Y-%m-%d')
+                        ]}]
+                    ),
+                    dict(
+                        label="All",
+                        method="relayout",
+                        args=[{"xaxis.range": [
+                            df.index[0].strftime('%Y-%m-%d'),
+                            df.index[-1].strftime('%Y-%m-%d')
+                        ]}]
+                    )
+                ])
+            )]
+        )
+
+        # Add range slider
+        fig.update_layout(
+            xaxis=dict(
+                rangeselector=dict(
+                    buttons=list([
+                        dict(step="all", label="All"),
+                        dict(step="month", stepmode="backward", label="1M"),
+                        dict(step="month", count=6, stepmode="backward", label="6M"),
+                        dict(step="year", stepmode="todate", label="YTD"),
+                        dict(step="year", stepmode="backward", label="1Y")
+                    ])
+                )
+            )
+        )
+
+        return fig
+
+    def generate_html_template(self, chart_div):
+        """Generate HTML template for chart"""
+        return f"""  
+        <!DOCTYPE html>  
+        <html lang="en">  
+        <head>  
+            <meta charset="UTF-8">  
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">  
+            <title>Stock Analysis Chart</title>  
+            <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500&display=swap" rel="stylesheet">  
+            <style>  
+                body {{  
+                    font-family: 'Roboto', sans-serif;  
+                    margin: 0;  
+                    padding: 20px;  
+                    background-color: #f5f5f5;  
+                }}  
+                .chart-container {{  
+                    background: white;  
+                    border-radius: 8px;  
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);  
+                    padding: 20px;  
+                    margin: 20px auto;  
+                    max-width: 1200px;  
+                }}  
+            </style>  
+        </head>  
+        <body>  
+            <div class="chart-container">  
+                {chart_div}  
+            </div>  
+        </body>  
+        </html>  
+        """
+
+    def update_chart(self, ticker, df):
+        """Update chart with new data"""
+        try:
+            # Create new chart
+            fig = self.create_candlestick_chart(df, ticker)
+            if fig is None:
+                raise ValueError("Failed to create candlestick chart")
+
+                # Convert to HTML
+            chart_div = fig.to_html(full_html=True, include_plotlyjs=True)
+
+            # Save to file
+            output_file = os.path.join(self.output_dir, f'{ticker}_chart.html')
+            with open(output_file, 'w', encoding='utf-8') as f:
+                f.write(chart_div)
+
+            logging.info(f"Updated chart saved to {output_file}")
+            return output_file
+
+        except Exception as e:
+            logging.error(f"Error updating chart: {str(e)}")
+            return None
+
 class StockAnalyzer:
     # Class-level constants
     EXCHANGE_MAPPINGS = {
@@ -215,26 +427,109 @@ class StockAnalyzer:
         'TASE:': '.TA',  # Tel Aviv Stock Exchange
     }
 
-    def __init__(self, ticker_symbol, start_date=None, end_date=None):
-        """Initialize the StockAnalyzer with a ticker symbol and date range"""
-        self.original_ticker = ticker_symbol
-        self.ticker_symbol = self.format_ticker(ticker_symbol)
-        self.start_date = start_date
-        self.end_date = end_date
-        self.news_data = []
-        self.company_info = {}
-        self.stock_data = None
-        self.output_dir = os.path.join('output', self.ticker_symbol)
+    def __init__(self, ticker_symbol=None, start_date=None, end_date=None, tickers_file='tickers.txt'):
+        # Initialize real-time components
+        self.real_time_manager = RealTimeDataManager(update_interval=60)
+        self.is_running = False
 
-        logging.info(f"Initializing StockAnalyzer for ticker: {ticker_symbol}")
-        logging.info(f"Date range: {start_date} to {end_date}")
-        logging.info(f"Formatted ticker symbol: {self.ticker_symbol}")
+        if ticker_symbol:
+            # Single ticker initialization
+            self.original_ticker = ticker_symbol
+            self.ticker_symbol = self.format_ticker(ticker_symbol)
+            self.start_date = start_date
+            self.end_date = end_date
+            self.news_data = []
+            self.company_info = {}
+            self.stock_data = None
+            self.output_dir = os.path.join('output', self.ticker_symbol)
 
-        # Ensure directories exist
-        os.makedirs(self.output_dir, exist_ok=True)
-        os.makedirs(os.path.join(self.output_dir, 'forecast_plots'), exist_ok=True)
-        os.makedirs(os.path.join(self.output_dir, 'technical_analysis'), exist_ok=True)
-        logging.info(f"Created output directories in {self.output_dir}")
+            # Initialize chart manager
+            self.chart_manager = ChartManager(output_dir=self.output_dir)
+
+            logging.info(f"Initializing StockAnalyzer for ticker: {ticker_symbol}")
+            logging.info(f"Date range: {start_date} to {end_date}")
+            logging.info(f"Formatted ticker symbol: {self.ticker_symbol}")
+
+            # Ensure directories exist
+            os.makedirs(self.output_dir, exist_ok=True)
+            os.makedirs(os.path.join(self.output_dir, 'forecast_plots'), exist_ok=True)
+            os.makedirs(os.path.join(self.output_dir, 'technical_analysis'), exist_ok=True)
+        else:
+            # Multiple tickers initialization
+            self.tickers = self.load_tickers(tickers_file)
+            self.analyzers = {}
+            self.initialize_analyzers()
+
+            def load_tickers(self, tickers_file: str) -> List[str]:
+                """Load tickers from file"""
+                try:
+                    if not os.path.exists(tickers_file):
+                        logging.error(f"Tickers file not found: {tickers_file}")
+                        return []
+
+                    with open(tickers_file, 'r') as f:
+                        tickers = [line.strip() for line in f if line.strip()]
+                    logging.info(f"Loaded {len(tickers)} tickers from {tickers_file}")
+                    return tickers
+                except Exception as e:
+                    logging.error(f"Error loading tickers: {e}")
+                    return []
+
+            def initialize_analyzers(self):
+                """Initialize individual stock analyzers"""
+                for ticker in self.tickers:
+                    self.analyzers[ticker] = {
+                        'data': pd.DataFrame(),
+                        'chart_manager': None  # Initialize your chart manager here
+                    }
+
+    def update_real_time_data(self):
+        """Handle real-time data updates"""
+        try:
+            # Get latest data
+            new_data = self.real_time_manager.connect([self.ticker_symbol])
+
+            if self.ticker_symbol in new_data and new_data[self.ticker_symbol]:
+                # Update stock data with new information
+                new_row = pd.DataFrame([new_data[self.ticker_symbol]])
+                self.stock_data = pd.concat([self.stock_data, new_row], ignore_index=True)
+
+                # Update charts
+                self.chart_manager.update_chart(self.ticker_symbol, self.stock_data)
+
+                # Perform real-time analysis
+                self.perform_real_time_analysis(new_data[self.ticker_symbol])
+
+        except Exception as e:
+            logging.error(f"Error updating real-time data: {e}")
+
+    def perform_real_time_analysis(self, data: dict):
+        """Perform analysis on real-time data"""
+        try:
+            # Update technical indicators
+            self.calculate_technical_indicators()
+
+            # Check for trading signals
+            signals = self.check_trading_signals()
+
+            if signals:
+                logging.info(f"New trading signals detected for {self.ticker_symbol}: {signals}")
+                # Implement your trading logic here
+
+        except Exception as e:
+            logging.error(f"Error in real-time analysis: {e}")
+
+    def start_real_time_updates(self):
+        """Start real-time data updates"""
+        self.is_running = True
+        while self.is_running:
+            if self.is_market_open():
+                self.update_real_time_data()
+            time.sleep(self.real_time_manager.update_interval)
+
+    def stop_real_time_updates(self):
+        """Stop real-time data updates"""
+        self.is_running = False
 
     @classmethod
     def format_ticker(cls, ticker):
@@ -664,116 +959,65 @@ class StockAnalyzer:
             return None
 
     def _create_candlestick_plot(self, patterns):
-        """Create interactive candlestick pattern visualization using Plotly with enhanced zoom/pan"""
+        """Create interactive candlestick visualization"""
         try:
-            import plotly.graph_objects as go
-            from plotly.subplots import make_subplots
-
-            # Prepare the data
-            df = self.stock_data.copy()
-
-            # Create figure with secondary y-axis
-            fig = make_subplots(rows=2, cols=1,
+            # Create figure with secondary y-axis and volume
+            fig = make_subplots(rows=3, cols=1,
                                 shared_xaxes=True,
                                 vertical_spacing=0.03,
-                                row_heights=[0.7, 0.3])
+                                row_heights=[0.6, 0.2, 0.2],
+                                subplot_titles=('Price & Patterns', 'Volume', 'RSI'))
 
-            # Add candlestick chart
+            # Main candlestick chart
             fig.add_trace(go.Candlestick(
-                x=df.index,
-                open=df['Open'],
-                high=df['High'],
-                low=df['Low'],
-                close=df['Close'],
-                name='OHLC'
+                x=self.stock_data.index,
+                open=self.stock_data['Open'],
+                high=self.stock_data['High'],
+                low=self.stock_data['Low'],
+                close=self.stock_data['Close'],
+                name='OHLC',
+                increasing_line_color='green',
+                decreasing_line_color='red'
             ), row=1, col=1)
 
             # Add volume bar chart
+            colors = ['red' if close < open else 'green'
+                      for close, open in zip(self.stock_data['Close'], self.stock_data['Open'])]
+
             fig.add_trace(go.Bar(
-                x=df.index,
-                y=df['Volume'],
+                x=self.stock_data.index,
+                y=self.stock_data['Volume'],
                 name='Volume',
-                marker_color='rgba(100,100,100,0.5)'
+                marker_color=colors,
+                opacity=0.7
             ), row=2, col=1)
 
-            # Add pattern markers (same as before)
-            for idx, row in patterns.iterrows():
-                marker_text = []
-                if row['Doji']: marker_text.append('Doji')
-                if row['Hammer']: marker_text.append('Hammer')
-                if row['Hanging_Man']: marker_text.append('Hanging Man')
-                if row['Engulfing'] == 'bullish': marker_text.append('Bullish Engulfing')
-                if row['Engulfing'] == 'bearish': marker_text.append('Bearish Engulfing')
-                if row['Abandoned_Baby']: marker_text.append(f'Abandoned Baby ({row["Abandoned_Baby"]})')
+            # Add RSI if available
+            if 'RSI' in self.stock_data.columns:
+                fig.add_trace(go.Scatter(
+                    x=self.stock_data.index,
+                    y=self.stock_data['RSI'],
+                    name='RSI',
+                    line=dict(color='purple')
+                ), row=3, col=1)
 
-                if marker_text:
-                    fig.add_trace(go.Scatter(
-                        x=[idx],
-                        y=[df.loc[idx, 'High']],
-                        mode='markers+text',
-                        name=', '.join(marker_text),
-                        text=marker_text,
-                        textposition='top center',
-                        marker=dict(
-                            symbol='triangle-down',
-                            size=15,
-                            color='red' if 'bearish' in str(marker_text).lower() else 'green'
-                        ),
-                        showlegend=True
-                    ), row=1, col=1)
+                # Add RSI levels
+                fig.add_hline(y=70, line_dash="dash", line_color="red", row=3, col=1)
+                fig.add_hline(y=30, line_dash="dash", line_color="green", row=3, col=1)
 
-                    # Enhanced layout with better zoom/pan controls
+                # Update layout
             fig.update_layout(
-                title=f'{self.ticker_symbol} Candlestick Patterns',
+                title=f'{self.ticker_symbol} Stock Analysis',
                 yaxis_title='Price',
-                yaxis2_title='Volume',
-                xaxis_rangeslider_visible=True,  # Add range slider for easy navigation
+                xaxis_rangeslider_visible=False,
                 height=800,
-                template='plotly_white',
-                hovermode='x unified',
-                legend=dict(
-                    yanchor="top",
-                    y=0.99,
-                    xanchor="left",
-                    x=0.01
-                ),
-                # Add modebar buttons for enhanced interaction
-                modebar=dict(
-                    add=[
-                        'drawline',
-                        'drawopenpath',
-                        'drawclosedpath',
-                        'drawcircle',
-                        'drawrect',
-                        'eraseshape'
-                    ]
-                ),
-                # Configure dragmode for better pan/zoom experience
-                dragmode='zoom',
-                selectdirection='any'
+                showlegend=True
             )
 
-            # Configure axes for better interaction
-            fig.update_xaxes(
-                rangeslider_visible=True,
-                rangeselector=dict(
-                    buttons=list([
-                        dict(count=1, label="1m", step="month", stepmode="backward"),
-                        dict(count=3, label="3m", step="month", stepmode="backward"),
-                        dict(count=6, label="6m", step="month", stepmode="backward"),
-                        dict(count=1, label="1y", step="year", stepmode="backward"),
-                        dict(step="all", label="All")
-                    ])
-                )
-            )
-
-            # Update y-axes labels and interaction
-            fig.update_yaxes(title_text="Price", row=1, col=1, fixedrange=False)
-            fig.update_yaxes(title_text="Volume", row=2, col=1, fixedrange=False)
-
-            # Save the interactive plot
-            plot_file = os.path.join(self.output_dir, f'{self.ticker_symbol}_candlestick_patterns.html')
+            # Save the plot
+            plot_file = os.path.join(self.output_dir, f'{self.ticker_symbol}_candlestick.html')
             fig.write_html(plot_file)
+            logging.info(f"Candlestick plot saved to {plot_file}")
 
             return fig
 
@@ -781,8 +1025,110 @@ class StockAnalyzer:
             logging.error(f"Error creating candlestick plot: {str(e)}")
             return None
 
+    def update_real_time_data(self):
+        """Update data in real-time"""
+        try:
+            # Get latest data point
+            latest_data = yf.download(self.ticker_symbol,
+                                      start=datetime.now() - timedelta(days=1),
+                                      end=datetime.now(),
+                                      interval='1m')
+
+            if not latest_data.empty:
+                # Update stock data
+                self.stock_data = pd.concat([self.stock_data, latest_data])
+
+                # Update patterns
+                new_patterns = self.analyze_candlestick_patterns()
+
+                # Update plot
+                self._update_plot(new_patterns)
+
+        except Exception as e:
+            logging.error(f"Error updating real-time data: {str(e)}")
+
+    def start_real_time_updates(self):
+        """Start real-time updates"""
+        import asyncio
+        from datetime import datetime, time
+
+        async def update_loop():
+            while True:
+                # Check if market is open
+                now = datetime.now().time()
+                market_open = time(9, 30)
+                market_close = time(16, 0)
+
+                if market_open <= now <= market_close:
+                    self.update_real_time_data()
+
+                    # Wait for 1 minute before next update
+                await asyncio.sleep(60)
+
+                # Start the update loop
+
+        asyncio.run(update_loop())
+
+    def setup_websocket(self):
+        """Setup WebSocket connection for real-time data"""
+        import websocket
+        import json
+
+        def on_message(ws, message):
+            data = json.loads(message)
+            self._process_real_time_data(data)
+
+        def on_error(ws, error):
+            logging.error(f"WebSocket error: {error}")
+
+        def on_close(ws):
+            logging.info("WebSocket connection closed")
+
+        def on_open(ws):
+            logging.info("WebSocket connection opened")
+            # Subscribe to ticker
+            ws.send(json.dumps({
+                "type": "subscribe",
+                "symbol": self.ticker_symbol
+            }))
+
+        websocket.enableTrace(True)
+        ws = websocket.WebSocketApp(f"wss://your-websocket-provider/{self.ticker_symbol}",
+                                    on_message=on_message,
+                                    on_error=on_error,
+                                    on_close=on_close,
+                                    on_open=on_open)
+
+        ws.run_forever()
+
+    def _create_auto_refresh_plot(self):
+        """Create plot with auto-refresh capability"""
+        import dash
+        from dash import dcc
+        from dash import html
+        from dash.dependencies import Input, Output
+
+        app = dash.Dash(__name__)
+
+        app.layout = html.Div([
+            dcc.Graph(id='live-chart'),
+            dcc.Interval(
+                id='interval-component',
+                interval=60 * 1000,  # in milliseconds
+                n_intervals=0
+            )
+        ])
+
+        @app.callback(Output('live-chart', 'figure'),
+                      Input('interval-component', 'n_intervals'))
+        def update_graph_live(n):
+            self.update_real_time_data()
+            return self._create_candlestick_plot(self.patterns)
+
+        return app
+
     def analyze_stock(self):
-        """Main analysis pipeline"""
+        """Main analysis pipeline with support for global markets"""
         try:
             print(f"\nStarting analysis for {self.ticker_symbol}...")
 
@@ -791,7 +1137,14 @@ class StockAnalyzer:
             self.fetch_financial_news()
             self.fetch_stock_data()
 
-            # Analysis
+            # Get market information
+            market_info = self._get_market_info()
+
+            if market_info is None:
+                logging.warning(f"Could not determine market information for {self.ticker_symbol}")
+                return
+
+                # Analysis
             if self.stock_data is not None and not self.stock_data.empty:
                 # Perform all analyses
                 results, summary = self.perform_technical_analysis()
@@ -802,10 +1155,20 @@ class StockAnalyzer:
                 # Generate trading signals
                 self.generate_buy_sell_signals(results)
 
-                # Prepare analysis results for trading bot
+                # Check if market is currently open
+                is_market_open = self.is_market_open()  # Changed from _is_market_open to is_market_open
+
+                # Create analysis results
                 analysis_results = {
                     'ticker': self.ticker_symbol,
                     'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'market_info': {
+                        'exchange': market_info['exchange'],
+                        'timezone': market_info['timezone'],
+                        'is_market_open': is_market_open,
+                        'next_market_open': market_info.get('next_open'),
+                        'next_market_close': market_info.get('next_close')
+                    },
                     'technical_indicators': {
                         'rsi': float(results['RSI'].iloc[-1]) if 'RSI' in results else None,
                         'macd': float(results['MACD'].iloc[-1]) if 'MACD' in results else None,
@@ -824,14 +1187,118 @@ class StockAnalyzer:
 
                 logging.info(f"Analysis results saved to {analysis_file}")
 
-                # Explicitly call trading bot
-                self.start_trading_bot(analysis_file)
+                # Always create and save visualization, regardless of market hours
+                patterns = self.analyze_candlestick_patterns()
+
+                # Create and save the plot using ChartManager
+                chart_file = self.chart_manager.update_chart(self.ticker_symbol, self.stock_data)
+                if chart_file:
+                    logging.info(f"Candlestick plot saved to {chart_file}")
+
+                    # Start trading bot only if market is open
+                if is_market_open:
+                    self.start_trading_bot(analysis_file)
+                else:
+                    logging.info(f"Market is closed for {self.ticker_symbol}, trading bot not started")
 
             else:
                 logging.warning(f"Cannot proceed with analysis for {self.ticker_symbol} due to missing stock data.")
 
         except Exception as e:
             logging.error(f"Error analyzing stock {self.ticker_symbol}: {str(e)}")
+
+    def _get_market_info(self):
+        """Get market information based on ticker symbol"""
+        try:
+            # Get ticker info from yfinance
+            ticker = yf.Ticker(self.ticker_symbol)
+            info = ticker.info
+
+            # Extract exchange information
+            exchange = info.get('exchange', '')
+
+            # Market hours mapping (add more exchanges as needed)
+            market_hours = {
+                'NYQ': {'timezone': 'America/New_York',  # NYSE
+                        'open_time': '09:30',
+                        'close_time': '16:00'},
+                'NMS': {'timezone': 'America/New_York',  # NASDAQ
+                        'open_time': '09:30',
+                        'close_time': '16:00'},
+                'LSE': {'timezone': 'Europe/London',  # London
+                        'open_time': '08:00',
+                        'close_time': '16:30'},
+                'TSE': {'timezone': 'Asia/Tokyo',  # Tokyo
+                        'open_time': '09:00',
+                        'close_time': '15:30'},
+                'SHH': {'timezone': 'Asia/Shanghai',  # Shanghai
+                        'open_time': '09:30',
+                        'close_time': '15:00'},
+                'ASX': {'timezone': 'Australia/Sydney',  # Australia
+                        'open_time': '10:00',
+                        'close_time': '16:00'},
+                'FRA': {'timezone': 'Europe/Berlin',  # Frankfurt
+                        'open_time': '09:00',
+                        'close_time': '17:30'},
+                'TSX': {'timezone': 'America/Toronto',  # Toronto
+                        'open_time': '09:30',
+                        'close_time': '16:00'},
+                # Add more exchanges as needed
+            }
+
+            # Get market hours for the exchange
+            market_data = market_hours.get(exchange, None)
+            if market_data is None:
+                # Try to determine market hours from the exchange suffix
+                for suffix, hours in market_hours.items():
+                    if self.ticker_symbol.endswith(suffix):
+                        market_data = hours
+                        break
+
+            if market_data:
+                return {
+                    'exchange': exchange,
+                    'timezone': market_data['timezone'],
+                    'open_time': market_data['open_time'],
+                    'close_time': market_data['close_time']
+                }
+            else:
+                logging.warning(f"Unknown exchange {exchange} for {self.ticker_symbol}")
+                return None
+
+        except Exception as e:
+            logging.error(f"Error getting market info for {self.ticker_symbol}: {str(e)}")
+            return None
+
+    def is_market_open(self) -> bool:
+        """Check if the market is currently open"""
+        try:
+            # Get current time in Eastern Time (ET)
+            et_tz = pytz.timezone('US/Eastern')
+            current_time = datetime.now(et_tz)
+
+            # Check if it's a weekday
+            if current_time.weekday() >= 5:  # 5 = Saturday, 6 = Sunday
+                logging.info(f"Market is closed for {self.ticker_symbol} (Weekend)")
+                return False
+
+                # Regular market hours are 9:30 AM - 4:00 PM ET
+            market_open = current_time.replace(hour=9, minute=30, second=0, microsecond=0)
+            market_close = current_time.replace(hour=16, minute=0, second=0, microsecond=0)
+
+            # Check if current time is within market hours
+            is_open = market_open <= current_time <= market_close
+
+            if not is_open:
+                logging.info(f"Market is closed for {self.ticker_symbol} (Outside trading hours)")
+            else:
+                logging.info(f"Market is open for {self.ticker_symbol}")
+
+            return is_open
+
+        except Exception as e:
+            logging.error(f"Error checking market hours: {e}")
+            return False
 
     def start_trading_bot(self, analysis_file):
         """Start trading bot with analysis results"""
@@ -1818,6 +2285,37 @@ class StockAnalyzer:
         except Exception as e:
             logging.error(f"Error creating LSTM plot: {str(e)}")
 
+    def _create_candlestick_plot(self, patterns):
+        """Create interactive candlestick visualization"""
+        try:
+            # Create figure with secondary y-axis and volume
+            fig = make_subplots(rows=3, cols=1,
+                                shared_xaxes=True,
+                                vertical_spacing=0.03,
+                                row_heights=[0.6, 0.2, 0.2],
+                                subplot_titles=('Price & Patterns', 'Volume', 'RSI'))
+
+            # Add candlestick chart
+            fig.add_trace(go.Candlestick(
+                x=self.stock_data.index,
+                open=self.stock_data['Open'],
+                high=self.stock_data['High'],
+                low=self.stock_data['Low'],
+                close=self.stock_data['Close'],
+                name='OHLC'
+            ), row=1, col=1)
+
+            # Save the plot to the correct output directory
+            plot_file = os.path.join(self.output_dir, f'{self.ticker_symbol}_candlestick.html')
+            fig.write_html(plot_file)
+            logging.info(f"Candlestick plot saved to {plot_file}")
+
+            return fig  # Return the figure object
+
+        except Exception as e:
+            logging.error(f"Error creating candlestick plot: {str(e)}")
+            return None
+
 class LSTMPredictor:
     def __init__(self, sequence_length=60):
         """Initialize LSTM predictor with given sequence length"""
@@ -2247,6 +2745,13 @@ class BollingerBandStrategy(Strategy):
         elif divergence == 'bullish' and self.position.is_short:
             self.position.close()
 
+def start_updates_in_thread(analyzer):
+    """Start updates in a separate thread"""
+    update_thread = Thread(target=analyzer.start_real_time_updates)
+    update_thread.daemon = True
+    update_thread.start()
+    return update_thread
+
 def main():
     # Set up logging before any prompts
     setup_logging()
@@ -2287,17 +2792,43 @@ def main():
 
         logging.info(f"Processing {len(tickers)} tickers")
 
+        active_analyzers = []  # Keep track of analyzers for real-time updates
+
         # Process each ticker
         for ticker in tickers:
-            analyzer = StockAnalyzer(ticker, start_date, end_date)
-            analyzer.analyze_stock()
+            try:
+                analyzer = StockAnalyzer(ticker, start_date, end_date)
+                analyzer.analyze_stock()  # Perform initial analysis
 
-        logging.info("All analysis completed")
+                # Start real-time updates if market is open
+                if analyzer.is_market_open():
+                    update_thread = start_updates_in_thread(analyzer)
+                    active_analyzers.append(analyzer)
+                    logging.info(f"Started real-time updates for {ticker}")
+
+            except Exception as e:
+                logging.error(f"Error analyzing {ticker}: {str(e)}", exc_info=True)
+                continue
+
+        logging.info("Initial analysis completed")
+
+        # Keep the program running if there are active real-time updates
+        if active_analyzers:
+            logging.info("Monitoring real-time updates. Press Ctrl+C to stop.")
+            try:
+                while True:
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                logging.info("Stopping all real-time updates...")
+                for analyzer in active_analyzers:
+                    analyzer.stop_real_time_updates()
+                logging.info("All real-time updates stopped")
+
+        logging.info("All processing completed")
 
     except Exception as e:
         logging.error(f"Fatal error in main execution: {str(e)}", exc_info=True)
 
 if __name__ == "__main__":
     main()
-
     # Run the script
